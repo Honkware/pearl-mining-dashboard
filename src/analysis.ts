@@ -448,9 +448,11 @@ export interface PayoutAudit {
   heldImmature: bigint;
   /** Transactions that spent its coinbases. */
   txs: number;
-  /** Distinct outside addresses those transactions paid, and how much. */
+  /**
+   * Distinct outside addresses those transactions paid. Not an amount: the same
+   * transactions also spend the pool's change, so their outputs exceed its rewards.
+   */
   payees: number;
-  sentOut: bigint;
   lastSpend: { height: number; time: number } | null;
 }
 
@@ -490,11 +492,11 @@ function computeAudit(ctx: Context, id: string): PayoutAudit | null {
   const t = sums.get(tip - maturity + 1, tip - maturity + 1, ...scripts) as { earned: bigint; spent: bigint; mature: bigint; immature: bigint };
   const spendTxs = `SELECT DISTINCT s.txid FROM payouts p CROSS JOIN spends s ON s.cb_txid = p.txid AND s.cb_vout = p.vout WHERE p.script IN (${marks})`;
   const out = db.prepare(
-    `SELECT COUNT(DISTINCT o.script) AS payees, COALESCE(SUM(o.value), 0) AS sent FROM spend_outputs o
+    `SELECT COUNT(DISTINCT o.script) AS payees FROM spend_outputs o
      WHERE o.txid IN (${spendTxs}) AND o.script NOT IN (${marks})`,
   );
   out.setReadBigInts(true);
-  const o = out.get(...scripts, ...scripts) as { payees: bigint; sent: bigint };
+  const o = out.get(...scripts, ...scripts) as { payees: bigint };
   const last = db
     .prepare(`SELECT MAX(s.height) AS height FROM (${spendTxs}) x JOIN spends s ON s.txid = x.txid`)
     .get(...scripts) as { height: number | null };
@@ -507,7 +509,6 @@ function computeAudit(ctx: Context, id: string): PayoutAudit | null {
     heldImmature: t.immature,
     txs,
     payees: Number(o.payees),
-    sentOut: o.sent,
     lastSpend: last.height === null || lastTime === null ? null : { height: last.height, time: lastTime },
   };
 }

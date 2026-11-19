@@ -49,7 +49,6 @@ test('a pool whose coinbase was paid out to two miners shows it spent, with two 
   expect(audit.txs).toBe(1);
   // Two miners; the change back to the pool's own address does not count.
   expect(audit.payees).toBe(2);
-  expect(audit.sentOut).toBe(value / 2n + value / 4n);
 
   const got = receivedFromPools(ctx, hex(testAddress(40, net)));
   expect(got.map((r) => [r.value, r.from])).toEqual([[value / 2n, [`script:${hex(pool)}`]]]);
