@@ -32,6 +32,7 @@ export interface PoolSource {
 const strip0x = (h: string): string => h.replace(/^0x/, '').toLowerCase();
 
 // Endpoints read from each site's own network requests on 2026-11-18.
+// No list found for F2Pool or minerlab (its API refused requests that day).
 export const POOLS: PoolSource[] = [
   {
     label: 'Kryptex',
@@ -88,6 +89,16 @@ export const POOLS: PoolSource[] = [
     parse: ([s]) => ({
       blockHashes: s.recent_blocks_found.map((x: Json) => strip0x(x.block_hash)),
       claim: { hashrate: s.pool_hashrate_6h, networkHashrate: s.network_hashrate },
+    }),
+  },
+  {
+    label: 'HeroMiners',
+    site: 'https://pearl.herominers.com',
+    urls: ['https://pearl.herominers.com/api/stats'],
+    // pool.blocks alternates "hash:time:...:..." strings with their heights.
+    parse: ([s]) => ({
+      blockHashes: s.pool.blocks.filter((x: Json) => typeof x === 'string' && x.includes(':')).map((x: string) => strip0x(x.split(':')[0]!)),
+      claim: { hashrate: s.pool.hashrate, networkHashrate: s.network.networkHashps },
     }),
   },
   {
