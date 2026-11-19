@@ -160,28 +160,34 @@ function verdict(r: MinerRow): { fits: boolean; word: string } {
 
 function claimCell(r: MinerRow): string {
   const c = r.claim;
-  if (c === null) return '<td class="muted">not published</td>';
+  if (c === null) return '<td></td>';
   const v = verdict(r);
   const title = `${c.claim.source}, ${utc(c.claim.readAt).slice(0, 10)}`;
   return `<td title="${esc(title)}"><span class="claimed">${pct(c.share)}</span> <span class="${v.fits ? 'tag ok' : 'tag off'}">${v.word}</span></td>`;
 }
 
-function minerRows(ctx: PageCtx, rows: MinerRow[], start = 0): string {
+/** The miners table; the claims column only appears when some row in it has a claim. */
+function minerTable(ctx: PageCtx, rows: MinerRow[]): string {
+  const claims = rows.some((r) => r.claim !== null);
+  const head = `<thead><tr><th></th><th>Miner</th><th>Share of blocks</th><th class="n">Blocks</th><th class="n">Hashrate</th>${claims ? '<th>Pool claims</th>' : ''}<th class="n">Last block</th></tr></thead>`;
+  return `<div class="scroll"><table>${head}<tbody>${minerRows(ctx, rows, claims)}</tbody></table></div>`;
+}
+
+function minerRows(ctx: PageCtx, rows: MinerRow[], claims: boolean): string {
   const max = Math.max(0.05, ...rows.map((r) => Math.max(r.shareInterval.hi, r.claim?.share ?? 0)));
   return rows
     .map((r, i) => `<tr>
-<td class="rank">${start + i + 1}</td>
+<td class="rank">${i + 1}</td>
 <td>${titleLink(r)}${r.labelled ? `<span class="sub">${r.scripts} address${r.scripts === 1 ? '' : 'es'}</span>` : r.tags.length > 0 || r.paysOut ? `<span class="sub mono">${esc(short(r.name))}</span>` : ''}</td>
 <td title="${pct(r.shareInterval.lo)} to ${pct(r.shareInterval.hi)}"><div class="share">${shareBar(r.share, r.shareInterval.lo, r.shareInterval.hi, max, r.claim?.share ?? null)}<span class="pctv">${pct(r.share)}</span></div></td>
 <td class="n">${int(r.blocks)}</td>
 <td class="n" title="${esc(range(r.rateInterval.lo, r.rateInterval.hi, rate))}">${rate(r.rate)}</td>
-${claimCell(r)}
+${claims ? claimCell(r) : ''}
 <td class="n"><span class="age">${ago(ctx.now - r.lastTime)}</span></td>
 </tr>`)
     .join('');
 }
 
-const MINER_HEAD = '<thead><tr><th></th><th>Miner</th><th>Share of blocks</th><th class="n">Blocks</th><th class="n">Hashrate</th><th>Pool says</th><th class="n">Last block</th></tr></thead>';
 
 function blockRows(ctx: PageCtx, list: RecentBlock[]): string {
   return list
@@ -209,7 +215,7 @@ export function overview(ctx: PageCtx, window: WindowName): string {
 ${stats(net, rows, ctx.network.targetSpacing)}
 <section class="card">
   <div class="head"><h2>Miners</h2><span class="muted">${int(rows.length)} in the last ${int(net.blocks)} blocks</span>${windowTabs(window, '/')}</div>
-  <div class="scroll"><table>${MINER_HEAD}<tbody>${minerRows(ctx, rows.slice(0, 10))}</tbody></table></div>
+  ${minerTable(ctx, rows.slice(0, 10))}
   <div class="foot"><a class="more" href="/miners?window=${window}">All ${int(rows.length)} miners</a></div>
 </section>
 <div class="grid even">
@@ -227,16 +233,15 @@ export function minersPage(ctx: PageCtx, window: WindowName): string {
   if (net === null) return layout(ctx, 'Miners: Pearl mining', '/miners', '<div class="card empty">No blocks indexed yet.</div>');
   const rows = miners(ctx, window);
   const chartRows = rows.filter((r, i) => i < 3 || r.share >= 0.01).slice(0, 12);
-  const body = minerRows(ctx, rows.slice(0, 500));
   return layout(ctx, 'Miners: Pearl mining', '/miners', `
 <section class="card">
   <div class="head"><h2>Share of blocks</h2><span class="muted">last ${int(net.blocks)} blocks</span>${windowTabs(window, '/miners')}</div>
   ${rankChart(chartRows.map((row) => ({ row, href: minerHref(row.id), label: minerTitle(row).text, mono: minerTitle(row).mono })))}
-  <div class="key"><span><i class="k-dot"></i>found</span><span><i class="k-claim"></i>pool says, matches</span><span><i class="k-claim off"></i>pool says, off</span></div>
+  <div class="key"><span><i class="k-dot"></i>found</span><span><i class="k-claim"></i>pool claims, matches</span><span><i class="k-claim off"></i>pool claims, off</span></div>
 </section>
 <section class="card">
   <div class="head"><h2>All miners</h2><span class="muted">${int(rows.length)}</span></div>
-  <div class="scroll"><table>${MINER_HEAD}<tbody>${body}</tbody></table></div>
+  ${minerTable(ctx, rows.slice(0, 500))}
 </section>`);
 }
 
@@ -274,7 +279,7 @@ ${tile('Per day, 14 days', sparkline(hist, WINDOWS.day), `${int(all.empty)} of $
     claim = `<section class="card">
 <div class="head"><h2>Pool claim</h2><span class="${v.fits ? 'tag ok' : 'tag off'}">${v.word}</span></div>
 <div class="stats inner">
-${tile('Pool says', pct(c.share), `${esc(c.claim.source)}, ${utc(c.claim.readAt).slice(0, 10)}`)}
+${tile('Pool claims', pct(c.share), `${esc(c.claim.source)}, ${utc(c.claim.readAt).slice(0, 10)}`)}
 ${tile('Found on chain', pct(current.share), `${pct(current.shareInterval.lo)} to ${pct(current.shareInterval.hi)}`)}
 ${tile('Blocks expected', int(Math.round(c.expected)), '')}
 ${tile('Blocks found', int(current.blocks), '')}
