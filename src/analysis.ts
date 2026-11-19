@@ -253,10 +253,12 @@ export interface RecentBlock {
   certKind: string | null;
   tag: string | null;
   payoutCount: number;
+  /** Transactions left waiting in the mempool when the block arrived; null when not seen live. */
+  waiting: number | null;
 }
 
 /** The payout scripts an identity covers: those under its label, or its one script. */
-function scriptsOf(ctx: Context, id: string): string[] {
+export function scriptsOf(ctx: Context, id: string): string[] {
   return id.startsWith('label:')
     ? [...ctx.labels.byScript].filter(([, e]) => e.label === id.slice(6)).map(([script]) => script)
     : [id.slice(7)];
@@ -276,7 +278,7 @@ export function recentBlocks(ctx: Context, limit: number, opts: { id?: string; b
     where.push(`payout_script IN (${scripts.map(() => '?').join(', ')})`);
     params.push(...scripts);
   }
-  const sql = `SELECT ${COLUMNS}, (SELECT p.time FROM blocks p WHERE p.height = blocks.height - 1) AS prev_time FROM blocks
+  const sql = `SELECT ${COLUMNS}, mempool_waiting, (SELECT p.time FROM blocks p WHERE p.height = blocks.height - 1) AS prev_time FROM blocks
     ${where.length === 0 ? '' : `WHERE ${where.join(' AND ')}`} ORDER BY height DESC LIMIT ?`;
   return rows(ctx, sql, ...params, limit).map((b) => {
     const prevTime = (b as unknown as { prev_time: number | null }).prev_time;
@@ -295,6 +297,7 @@ export function recentBlocks(ctx: Context, limit: number, opts: { id?: string; b
       certKind: b.cert_kind,
       tag: b.tag,
       payoutCount: b.payout_count,
+      waiting: (b as unknown as { mempool_waiting: number | null }).mempool_waiting,
     };
   });
 }
@@ -409,4 +412,126 @@ export function shareHistory(ctx: Context, buckets: number, per: number): { per:
     counts.set(id, c);
   });
   return { per, counts };
+}
+
+export interface PayoutAudit {
+  /** Coinbase outputs paid to the identity, all time, in grain. */
+  earned: bigint;
+  /** Of those, spent on chain. */
+  spent: bigint;
+  /** Unspent and past coinbase maturity: free to spend, not spent. */
+  heldMature: bigint;
+  heldImmature: bigint;
+  /** Transactions that spent its coinbases. */
+  txs: number;
+  /** Distinct outside addresses those transactions paid, and how much. */
+  payees: number;
+  sentOut: bigint;
+  lastSpend: { height: number; time: number } | null;
+}
+
+/** Where an identity's coinbase rewards went, as far as the indexed chain shows. */
+export function payoutAudit(ctx: Context, id: string): PayoutAudit | null {
+  const scripts = scriptsOf(ctx, id);
+  if (scripts.length === 0) return null;
+  const marks = scripts.map(() => '?').join(', ');
+  const db = ctx.store.db;
+  const tip = ctx.store.tipHeight() ?? 0;
+  const maturity = ctx.network.coinbaseMaturity;
+  const sums = db
+    .prepare(
+      `SELECT
+         COALESCE(SUM(p.value), 0) AS earned,
+         COALESCE(SUM(CASE WHEN s.txid IS NOT NULL THEN p.value END), 0) AS spent,
+         COALESCE(SUM(CASE WHEN s.txid IS NULL AND p.height <= ? THEN p.value END), 0) AS mature,
+         COALESCE(SUM(CASE WHEN s.txid IS NULL AND p.height > ? THEN p.value END), 0) AS immature
+       FROM payouts p LEFT JOIN spends s ON s.cb_txid = p.txid AND s.cb_vout = p.vout
+       WHERE p.script IN (${marks})`,
+    );
+  sums.setReadBigInts(true);
+  const t = sums.get(tip - maturity + 1, tip - maturity + 1, ...scripts) as { earned: bigint; spent: bigint; mature: bigint; immature: bigint };
+  const spendTxs = `SELECT DISTINCT s.txid FROM payouts p CROSS JOIN spends s ON s.cb_txid = p.txid AND s.cb_vout = p.vout WHERE p.script IN (${marks})`;
+  const out = db.prepare(
+    `SELECT COUNT(DISTINCT o.script) AS payees, COALESCE(SUM(o.value), 0) AS sent FROM spend_outputs o
+     WHERE o.txid IN (${spendTxs}) AND o.script NOT IN (${marks})`,
+  );
+  out.setReadBigInts(true);
+  const o = out.get(...scripts, ...scripts) as { payees: bigint; sent: bigint };
+  const last = db
+    .prepare(`SELECT MAX(s.height) AS height FROM (${spendTxs}) x JOIN spends s ON s.txid = x.txid`)
+    .get(...scripts) as { height: number | null };
+  const txs = (db.prepare(`SELECT COUNT(*) AS n FROM (${spendTxs})`).get(...scripts) as { n: number }).n;
+  const lastTime = last.height === null ? null : (db.prepare('SELECT time FROM blocks WHERE height = ?').get(last.height) as { time: number } | undefined)?.time ?? null;
+  return {
+    earned: t.earned,
+    spent: t.spent,
+    heldMature: t.mature,
+    heldImmature: t.immature,
+    txs,
+    payees: Number(o.payees),
+    sentOut: o.sent,
+    lastSpend: last.height === null || lastTime === null ? null : { height: last.height, time: lastTime },
+  };
+}
+
+export interface Received {
+  txid: string;
+  height: number;
+  time: number;
+  value: bigint;
+  /** Identities whose coinbases the paying transaction spent. */
+  from: string[];
+}
+
+/** Payments to a script from transactions that spend coinbases, newest first. */
+export function receivedFromPools(ctx: Context, script: string, limit = 100): Received[] {
+  const q = ctx.store.db.prepare(
+    `SELECT o.txid AS txid, o.height AS height, b.time AS time, SUM(o.value) AS value FROM spend_outputs o JOIN blocks b ON b.height = o.height
+     WHERE o.script = ? GROUP BY o.txid ORDER BY o.height DESC LIMIT ?`,
+  );
+  q.setReadBigInts(true);
+  const rowsOut = q.all(script, limit) as { txid: string; height: bigint; time: bigint; value: bigint }[];
+  const fromQ = ctx.store.db.prepare('SELECT DISTINCT p.script AS script FROM spends s CROSS JOIN payouts p ON p.txid = s.cb_txid AND p.vout = s.cb_vout WHERE s.txid = ?');
+  return rowsOut.map((r) => ({
+    txid: r.txid,
+    height: Number(r.height),
+    time: Number(r.time),
+    value: r.value,
+    from: [...new Set((fromQ.all(r.txid) as { script: string }[]).map((x) => identityOf(x.script, ctx.labels)))],
+  }));
+}
+
+/** Blocks an identity mined in a window that carried only the coinbase, and how many of those left transactions waiting. */
+export function emptyBlocks(ctx: Context, id: string, window: WindowName): { blocks: number; empty: number; seen: number; leftWaiting: number; fees: bigint } {
+  const { blocks } = windowBlocks(ctx, window);
+  const mine = blocks.filter((b) => identityOf(b.payout_script, ctx.labels) === id);
+  const empties = mine.filter((b) => b.tx_count === 1);
+  const heights = empties.map((b) => b.height);
+  let seen = 0;
+  let leftWaiting = 0;
+  let fees = 0n;
+  if (heights.length > 0) {
+    const q = ctx.store.db.prepare(`SELECT mempool_waiting AS w, mempool_fees AS f FROM blocks WHERE height IN (${heights.map(() => '?').join(', ')}) AND mempool_waiting IS NOT NULL`);
+    q.setReadBigInts(true);
+    for (const r of q.all(...heights) as { w: bigint; f: bigint }[]) {
+      seen += 1;
+      if (r.w > 0n) {
+        leftWaiting += 1;
+        fees += r.f;
+      }
+    }
+  }
+  return { blocks: mine.length, empty: empties.length, seen, leftWaiting, fees };
+}
+
+/** How an identity's blocks in a window split by proof kind and certificate version. */
+export function certificateMix(ctx: Context, id: string, window: WindowName): { kind: string; blocks: number }[] {
+  const { blocks } = windowBlocks(ctx, window);
+  const counts = new Map<string, number>();
+  for (const b of blocks) {
+    if (identityOf(b.payout_script, ctx.labels) !== id) continue;
+    const k = b.cert_version === null ? 'none' : `V${b.cert_version} ${b.cert_kind}`;
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  return [...counts].map(([kind, n]) => ({ kind, blocks: n })).sort((a, b) => b.blocks - a.blocks);
 }

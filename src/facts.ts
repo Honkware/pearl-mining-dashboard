@@ -56,6 +56,8 @@ export interface CoinbaseSpend {
   outputs: number;
   /** The coinbase outputs this transaction spends, as txid:vout. */
   spent: string[];
+  /** What it pays, output by output. */
+  outs: { vout: number; value: bigint; script: string }[];
 }
 
 const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString('hex');
@@ -156,7 +158,10 @@ export function coinbaseSpends(block: PearlBlock, isCoinbaseOutput: (outpoint: s
     const spent = tx.ins
       .map((input) => `${hex(Uint8Array.from(input.hash).reverse())}:${input.index}`)
       .filter(isCoinbaseOutput);
-    if (spent.length > 0) found.push({ txid: tx.getId(), inputs: tx.ins.length, outputs: tx.outs.length, spent });
+    if (spent.length > 0) {
+      const outs = tx.outs.map((o, vout) => ({ vout, value: o.value, script: hex(o.script) }));
+      found.push({ txid: tx.getId(), inputs: tx.ins.length, outputs: tx.outs.length, spent, outs });
+    }
   }
   return found;
 }

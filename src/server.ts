@@ -10,7 +10,8 @@ import type { PearlNetwork } from 'pearljs';
 import { WINDOWS, miners, network, recentBlocks, stale, type WindowName } from './analysis.js';
 import type { Store } from './db.js';
 import { loadClaims, loadLabels, loadSignedNames, mergeLabels, type Claim, type Labels } from './labels.js';
-import { blocksPage, minerPage, minersPage, overview, type PageCtx } from './views.js';
+import { addressPage, blocksPage, minerPage, minersPage, overview, type PageCtx } from './views.js';
+import { isValidAddress } from 'pearljs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -142,6 +143,13 @@ export function createApp(opts: ServeOptions): Server {
         const below = url.searchParams.get('below');
         return page(() => blocksPage(ctx, below === null ? null : Number(below)));
       }
+      const q = url.searchParams.get('q')?.trim() ?? '';
+      if (url.pathname === '/miners' && q !== '' && isValidAddress(q, opts.network)) {
+        res.writeHead(302, { location: `/address/${encodeURIComponent(q)}` });
+        res.end();
+        return;
+      }
+      if (url.pathname.startsWith('/address/')) return page(() => addressPage(ctx, decodeURIComponent(url.pathname.slice(9))));
       if (url.pathname === '/miners') return page(() => minersPage(ctx, window, url.searchParams.get('q') ?? '', Number(url.searchParams.get('page') ?? 1) || 1));
       if (url.pathname.startsWith('/miner/')) return page(() => minerPage(ctx, decodeURIComponent(url.pathname.slice(7)), window));
       if (url.pathname === '/api/network.json') return send(200, 'application/json', json(network(ctx, window)));

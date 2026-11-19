@@ -52,6 +52,16 @@ CREATE TABLE IF NOT EXISTS spends (
 );
 CREATE INDEX IF NOT EXISTS spends_height ON spends (height);
 CREATE INDEX IF NOT EXISTS spends_cb ON spends (cb_txid, cb_vout);
+CREATE TABLE IF NOT EXISTS spend_outputs (
+  height INTEGER NOT NULL,
+  txid TEXT NOT NULL,
+  vout INTEGER NOT NULL,
+  value INTEGER NOT NULL,
+  script TEXT NOT NULL,
+  PRIMARY KEY (txid, vout)
+);
+CREATE INDEX IF NOT EXISTS spend_outputs_height ON spend_outputs (height);
+CREATE INDEX IF NOT EXISTS spend_outputs_script ON spend_outputs (script);
 CREATE TABLE IF NOT EXISTS stale (
   hash TEXT PRIMARY KEY,
   height INTEGER NOT NULL,
@@ -71,16 +81,33 @@ export class Store {
     // The indexer writes while the web server reads the same file; wait for a lock instead of failing.
     this.db.exec('PRAGMA busy_timeout = 10000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = OFF;');
     this.db.exec(SCHEMA);
-    // Stores made before blocks were checked lack the column; their blocks count as unchecked (NULL).
+    // Columns added after the first stores were made; older rows hold NULL, meaning unknown.
+    this.addColumn('check_failed', 'TEXT');
+    this.addColumn('mempool_waiting', 'INTEGER');
+    this.addColumn('mempool_fees', 'INTEGER');
+    this.addColumn('mempool_vsize', 'INTEGER');
+  }
+
+  private addColumn(name: string, type: string): void {
     const cols = this.db.prepare('PRAGMA table_info(blocks)').all() as { name: string }[];
-    if (!cols.some((c) => c.name === 'check_failed')) {
-      try {
-        this.db.exec('ALTER TABLE blocks ADD COLUMN check_failed TEXT');
-      } catch (err) {
-        // The indexer and the web server open the store together; the other one may have just added it.
-        if (!String(err).includes('duplicate column')) throw err;
-      }
+    if (cols.some((c) => c.name === name)) return;
+    try {
+      this.db.exec(`ALTER TABLE blocks ADD COLUMN ${name} ${type}`);
+    } catch (err) {
+      // The indexer and the web server open the store together; the other one may have just added it.
+      if (!String(err).includes('duplicate column')) throw err;
     }
+  }
+
+  /** What a coinbase-spending transaction paid out; safe to repeat. */
+  addSpendOutputs(height: number, spends: CoinbaseSpend[]): void {
+    const out = this.db.prepare('INSERT OR IGNORE INTO spend_outputs (height, txid, vout, value, script) VALUES (?, ?, ?, ?, ?)');
+    for (const s of spends) for (const o of s.outs) out.run(height, s.txid, o.vout, o.value, o.script);
+  }
+
+  /** The mempool seen just before a block arrived, for the empty-block check. */
+  setMempool(height: number, m: { waiting: number; fees: bigint; vsize: number }): void {
+    this.db.prepare('UPDATE blocks SET mempool_waiting = ?, mempool_fees = ?, mempool_vsize = ? WHERE height = ?').run(m.waiting, m.fees, m.vsize, height);
   }
 
   close(): void {
@@ -143,6 +170,7 @@ export class Store {
         spend.run(f.height, s.txid, s.inputs, s.outputs, txid!, Number(vout));
       }
     }
+    this.addSpendOutputs(f.height, spends);
   }
 
   /** Undoes the newest block, keeping a record of it as stale. */
@@ -157,6 +185,7 @@ export class Store {
       .prepare('INSERT OR REPLACE INTO stale (hash, height, time, payout_script, reward, source, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(hash, height, row.time, row.payout_script, row.reward, 'reorg', seenAt);
     this.db.prepare('DELETE FROM spends WHERE height = ?').run(height);
+    this.db.prepare('DELETE FROM spend_outputs WHERE height = ?').run(height);
     this.db.prepare('DELETE FROM payouts WHERE height = ?').run(height);
     this.db.prepare('DELETE FROM blocks WHERE height = ?').run(height);
   }

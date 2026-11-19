@@ -1,7 +1,14 @@
 // HTML pages. The overview is for a glance: headline numbers, the miners,
 // the latest blocks. Definitions live in tooltips.
+import { fromOutputScript, isValidAddress, toOutputScript } from 'pearljs';
 import {
   WINDOWS,
+  certificateMix,
+  emptyBlocks,
+  payoutAudit,
+  receivedFromPools,
+  scriptsOf,
+  stale,
   intervals,
   links,
   miners,
@@ -207,7 +214,7 @@ function blockRows(ctx: PageCtx, list: RecentBlock[]): string {
 <td class="n mono">${int(b.height)}</td>
 <td>${minerLink(b.id, b.name)}</td>
 <td class="muted" title="${utc(b.time)} UTC">${ago(ctx.now - b.time)} ago</td>
-<td class="n">${int(b.txCount)}</td>
+<td class="n">${int(b.txCount)}${b.txCount === 1 && b.waiting !== null && b.waiting > 0 ? `<span class="sub warn">${int(b.waiting)} waiting</span>` : ''}</td>
 <td class="n">${prl(b.reward)}</td>
 <td class="n">${b.interval === null ? '' : b.interval < 0 ? 'before parent' : clock(b.interval)}</td>
 </tr>`)
@@ -270,6 +277,52 @@ export function minersPage(ctx: PageCtx, window: WindowName, query = '', page = 
 </section>`);
 }
 
+function staleSection(ctx: PageCtx): string {
+  const list = stale(ctx);
+  if (list.length === 0) return '';
+  const rows = list
+    .slice(0, 50)
+    .map((s) => `<tr><td class="n mono">${int(s.height)}</td><td>${s.name === null ? '<span class="muted">unknown</span>' : esc(s.name.length > 22 ? short(s.name) : s.name)}</td><td class="muted">${ago(ctx.now - s.seenAt)} ago</td><td class="mono muted">${s.hash.slice(0, 16)}…</td></tr>`)
+    .join('');
+  return `<section class="card"><div class="head"><h2>Stale blocks</h2><span class="muted">${int(list.length)} seen by this node</span></div>
+<div class="scroll"><table><thead><tr><th class="n">Height</th><th>Miner</th><th>Seen</th><th>Hash</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+}
+
+function addressOf(script: string, ctx: PageCtx): string {
+  try {
+    return fromOutputScript(Buffer.from(script, 'hex'), ctx.network);
+  } catch {
+    return script;
+  }
+}
+
+/** One address: what it mined, and what it received from transactions spending pool coinbases. */
+export function addressPage(ctx: PageCtx, address: string): string | null {
+  if (!isValidAddress(address, ctx.network)) return null;
+  const script = Buffer.from(toOutputScript(address, ctx.network)).toString('hex');
+  const id = ctx.labels.byScript.has(script) ? `label:${ctx.labels.byScript.get(script)!.label}` : `script:${script}`;
+  const mined = miners(ctx, 'all').find((r) => r.id === id && r.blocks > 0);
+  const got = receivedFromPools(ctx, script);
+  const total = got.reduce((s, r) => s + r.value, 0n);
+  const tile = (k: string, v: string, sub: string): string => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
+  const byPool = new Map<string, bigint>();
+  for (const r of got) for (const f of r.from) byPool.set(f, (byPool.get(f) ?? 0n) + r.value);
+  const name = (i: string): string => (i.startsWith('label:') ? i.slice(6) : short(addressOf(i.slice(7), ctx)));
+  const rows = got
+    .map((r) => `<tr><td class="n mono">${int(r.height)}</td><td class="muted" title="${utc(r.time)} UTC">${ago(ctx.now - r.time)} ago</td><td>${r.from.map((f) => `<a class="who${f.startsWith('label:') ? '' : ' mono'}" href="${minerHref(f)}">${esc(name(f))}</a>`).join(', ')}</td><td class="n">${prl(r.value, 4)}</td></tr>`)
+    .join('');
+  return layout(ctx, `${short(address)}: Pearl mining`, '', `
+<div class="title"><h1 class="mono">${esc(address)}</h1></div>
+<div class="stats">
+${tile('Mined', mined === undefined ? 'no blocks' : `${int(mined.blocks)} blocks`, mined === undefined ? '' : `<a href="${minerHref(mined.id)}">${esc(minerTitle(mined).text)}</a>`)}
+${tile('Received from pools', `${prl(total, 2)} PRL`, `${int(got.length)} payments${got.length === 100 ? ' (latest 100)' : ''}`)}
+${tile('Paid by', byPool.size === 0 ? 'none' : [...byPool.keys()].map(name).slice(0, 3).join(', '), '')}
+</div>
+<section class="card"><div class="head"><h2>Payments from pools</h2></div>
+${got.length === 0 ? '<p class="muted">None</p>' : `<div class="scroll"><table><thead><tr><th class="n">Block</th><th>When</th><th>From</th><th class="n">PRL</th></tr></thead><tbody>${rows}</tbody></table></div>`}
+</section>`);
+}
+
 export function blocksPage(ctx: PageCtx, below: number | null): string {
   const list = recentBlocks(ctx, 100, below === null ? {} : { below });
   const last = list[list.length - 1];
@@ -277,7 +330,8 @@ export function blocksPage(ctx: PageCtx, below: number | null): string {
 <div class="head"><h2>Blocks</h2></div>
 <div class="scroll"><table>${BLOCK_HEAD}<tbody>${blockRows(ctx, list)}</tbody></table></div>
 ${last !== undefined && last.height > 0 ? `<a class="more" href="/blocks?below=${last.height}">Older blocks</a>` : ''}
-</section>`);
+</section>
+${staleSection(ctx)}`);
 }
 
 export function minerPage(ctx: PageCtx, id: string, window: WindowName): string | null {
@@ -286,7 +340,7 @@ export function minerPage(ctx: PageCtx, id: string, window: WindowName): string 
   const current = miners(ctx, window).find((r) => r.id === id);
   const net = network(ctx, window);
   const entry = id.startsWith('label:') ? ctx.labels.entries.find((e) => e.label === all.name) : undefined;
-  const scripts = entry !== undefined ? entry.scripts : [all.name];
+  const addresses = scriptsOf(ctx, id).map((s) => addressOf(s, ctx));
   const hist = shareHistory(ctx, 14, WINDOWS.day).counts.get(id) ?? new Array<number>(14).fill(0);
   const tile = (k: string, v: string, s: string, title = ''): string => `<div class="stat"${title ? ` title="${esc(title)}"` : ''}><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
   const statsRow = `<div class="stats">
@@ -294,8 +348,29 @@ ${tile('Share of blocks', current === undefined ? '0%' : pct(current.share), cur
 ${tile('Blocks', int(current?.blocks ?? 0), `of ${int(net?.blocks ?? 0)}`)}
 ${tile('Hashrate', current === undefined ? '0' : rate(current.rate), current === undefined ? '' : `${rate(current.rateInterval.lo)} to ${rate(current.rateInterval.hi)}`)}
 ${tile('Last block', int(all.lastHeight), `${ago(ctx.now - all.lastTime)} ago`)}
-${tile('Per day, 14 days', sparkline(hist, WINDOWS.day), `${int(all.empty)} of ${int(all.blocks)} blocks empty`)}
+${tile('Per day, 14 days', sparkline(hist, WINDOWS.day), '')}
 </div>`;
+  const audit = payoutAudit(ctx, id);
+  const paidOut = audit === null ? '' : `<section class="card">
+<div class="head"><h2>Payouts</h2><span class="muted">all time</span></div>
+<div class="stats inner">
+${tile('Rewards earned', `${prl(audit.earned, 0)} PRL`, '')}
+${tile('Spent', audit.earned === 0n ? '0%' : pct(Number(audit.spent) / Number(audit.earned), 0), `${int(audit.txs)} transactions`)}
+${tile('Held', `${prl(audit.heldMature, 0)} PRL`, audit.heldImmature > 0n ? `${prl(audit.heldImmature, 0)} PRL still maturing` : 'mature, unspent')}
+${tile('Paid to', `${int(audit.payees)} addresses`, `${prl(audit.sentOut, 0)} PRL`)}
+${tile('Last spend', audit.lastSpend === null ? 'never' : int(audit.lastSpend.height), audit.lastSpend === null ? '' : `${ago(ctx.now - audit.lastSpend.time)} ago`)}
+</div>
+</section>`;
+  const e = emptyBlocks(ctx, id, window);
+  const mix = certificateMix(ctx, id, window);
+  const blockFacts = e.blocks === 0 ? '' : `<section class="card">
+<div class="head"><h2>Blocks</h2></div>
+<div class="stats inner">
+${tile('Empty', `${int(e.empty)} of ${int(e.blocks)}`, pct(e.empty / e.blocks, 0))}
+${tile('Empty while txs waited', e.seen === 0 ? 'not seen yet' : `${int(e.leftWaiting)} of ${int(e.seen)}`, e.seen === 0 ? 'recorded live only' : `${prl(e.fees, 4)} PRL in fees left`)}
+${tile('Proofs', mix.map((m) => m.kind).join(', ') || 'none', mix.map((m) => pct(m.blocks / e.blocks, 0)).join(', '))}
+</div>
+</section>`;
 
   let claim = '';
   if (current?.claim) {
@@ -320,9 +395,11 @@ ${tile('Blocks found', int(current.blocks), '')}
 <div class="title"><h1 class="${all.labelled ? '' : 'mono'}">${esc(all.labelled ? all.name : all.name)}</h1>${windowTabs(window, minerHref(id))}</div>
 ${statsRow}
 ${claim}
+${paidOut}
+${blockFacts}
 <div class="grid even">
 <section class="card"><div class="head"><h2>Addresses</h2><span class="muted">${entry !== undefined ? esc(entry.source) : ''}</span></div>
-<ul class="plain">${scripts.map((s) => `<li class="mono">${esc(s)}</li>`).join('')}</ul>
+<ul class="plain">${addresses.map((a) => `<li class="mono"><a href="/address/${esc(a)}">${esc(a)}</a></li>`).join('')}</ul>
 ${all.tags.length > 0 ? `<p class="muted">Coinbase text: ${all.tags.map((t) => `"${esc(t)}"`).join(', ')}</p>` : ''}</section>
 <section class="card"><div class="head"><h2>Linked by spending</h2></div>
 ${linkItems.length === 0 ? '<p class="muted">None</p>' : `<ul class="plain">${linkItems.join('')}</ul>`}</section>

@@ -50,11 +50,42 @@ async function main(): Promise<void> {
   const { client, ws, network } = nodeFromEnv();
   const store = new Store(join(dataDir, `${network.name}.sqlite`));
 
+  if (cmd === 'backfill') {
+    // Stores made before payout outputs were recorded: re-read the blocks that hold coinbase spends.
+    const { parseBlock } = await import('pearljs');
+    const { coinbaseSpends } = await import('./facts.js');
+    const todo = store.db
+      .prepare('SELECT DISTINCT s.height AS height, b.hash AS hash FROM spends s JOIN blocks b ON b.height = s.height WHERE NOT EXISTS (SELECT 1 FROM spend_outputs o WHERE o.txid = s.txid) ORDER BY s.height')
+      .all() as { height: number; hash: string }[];
+    log(`[backfill] ${todo.length} blocks to re-read`);
+    for (let i = 0; i < todo.length; i++) {
+      const { height, hash } = todo[i]!;
+      // pearld can stall for a while when it flushes its UTXO cache; wait and ask again.
+      let raw: Uint8Array | null = null;
+      for (let attempt = 1; raw === null; attempt++) {
+        try {
+          raw = await client.getRawBlock(hash);
+        } catch (err) {
+          if (attempt >= 5) throw err;
+          log(`[backfill] retry ${attempt} at ${height}: ${err instanceof Error ? err.message : String(err)}`);
+          await new Promise((r) => setTimeout(r, 5000 * attempt));
+        }
+      }
+      const block = parseBlock(raw);
+      store.tx(() => store.addSpendOutputs(height, coinbaseSpends(block, (o) => store.isCoinbaseOutput(o))));
+      if ((i + 1) % 1000 === 0) log(`[backfill] ${i + 1} of ${todo.length}`);
+    }
+    await ws.close();
+    store.close();
+    log('[backfill] done');
+    return;
+  }
   if (cmd === 'index') {
     const watch = startIndexer({
       store,
       rpc: client,
       ws,
+      watchMempool: true,
       network,
       startHeight: Number(process.env.START_HEIGHT ?? 0),
       stopAtTip: process.env.STOP_AT_TIP === '1',
@@ -79,7 +110,7 @@ async function main(): Promise<void> {
     await serve({ store, network, dataDir, port: Number(process.env.PORT ?? 8080), host: process.env.HOST ?? '127.0.0.1', nodeHeight: () => client.getBlockCount(), refreshPools: process.env.REFRESH_POOLS !== '0', log });
     return;
   }
-  console.error('usage: cli.js index | serve | pools | proof-message | demo');
+  console.error('usage: cli.js index | serve | pools | backfill | proof-message | demo');
   process.exitCode = 2;
 }
 

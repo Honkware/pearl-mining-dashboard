@@ -1,13 +1,15 @@
 // Follows the node's best chain into the store. Each event and the
 // follower's cursor are written in one transaction, so a crash between
 // blocks resumes exactly where the store stands.
-import { watchChain, type ChainWatch, type FollowEvent, type FollowOptions, type PearlNetwork, type PearldRpc } from 'pearljs';
+import { watchChain, type ChainWatch, type FollowEvent, type FollowOptions, type MempoolEntry, type PearlNetwork, type PearldRpc } from 'pearljs';
 import { blockFacts, coinbaseSpends } from './facts.js';
 import type { Store } from './db.js';
 
 export interface IndexerOptions {
   store: Store;
-  rpc: Pick<PearldRpc, 'call' | 'getChainTips' | 'getBlockHeader'>;
+  rpc: Pick<PearldRpc, 'call' | 'getChainTips' | 'getBlockHeader' | 'getRawMempoolVerbose'>;
+  /** Snapshot the mempool while at the tip, to record what each new block left waiting. */
+  watchMempool?: boolean;
   network: PearlNetwork;
   /** Height to start from on an empty store. 0 unless given. */
   startHeight?: number;
@@ -31,9 +33,22 @@ export function startIndexer(opts: IndexerOptions): ChainWatch {
   if (savedNetwork === null) store.setMeta('network', network.name);
   const from = saved !== null ? { cursor: saved } : { height: opts.startHeight ?? 0 };
   let forksCheckedAt = 0;
+  // Mempool snapshots, taken only once at the tip: a block found during catch-up
+  // says nothing about the mempool its miner saw.
+  let live = false;
+  let snapshot: { at: number; entries: Record<string, MempoolEntry> } | null = null;
+  const takeSnapshot = async (): Promise<void> => {
+    try {
+      snapshot = { at: now(), entries: await rpc.getRawMempoolVerbose() };
+    } catch (err) {
+      log(`[index] mempool snapshot skipped: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+  const timer = opts.watchMempool === true ? setInterval(() => void (live ? takeSnapshot() : undefined), 15_000) : null;
+  timer?.unref();
   log(`[index] start ${saved !== null ? `after ${saved.height} ${saved.hash.slice(0, 16)}` : `at ${from.height}`}`);
 
-  return watchChain(rpc, {
+  const watch = watchChain(rpc, {
     from,
     stopAtTip: opts.stopAtTip ?? false,
     ...(opts.pollInterval === undefined ? {} : { pollInterval: opts.pollInterval }),
@@ -43,8 +58,10 @@ export function startIndexer(opts: IndexerOptions): ChainWatch {
       if (event.type === 'connected') {
         const facts = blockFacts(event.block, event.height, event.hash, network);
         if (facts.checkFailed !== null) log(`[index] block ${event.height} ${event.hash} failed ${facts.checkFailed}`);
+        const waiting = live && snapshot !== null && now() - snapshot.at <= 60 ? leftWaiting(event.block, snapshot.entries, now()) : null;
         store.tx(() => {
           store.connect(facts, coinbaseSpends(event.block, (o) => store.isCoinbaseOutput(o)));
+          if (waiting !== null) store.setMempool(event.height, waiting);
           store.setCursor(cursor);
         });
         if (event.height % 1000 === 0) log(`[index] ${event.height}`);
@@ -67,10 +84,37 @@ export function startIndexer(opts: IndexerOptions): ChainWatch {
           }
         }
         log(`[index] synced at ${event.height}`);
+        if (opts.watchMempool === true && !live) {
+          live = true;
+          await takeSnapshot();
+        }
       }
       opts.onEvent?.(event);
     },
   });
+  void watch.done.finally(() => {
+    if (timer !== null) clearInterval(timer);
+  }).catch(() => {});
+  return watch;
+}
+
+/**
+ * Transactions that had waited in the mempool at least 30 s when a block
+ * arrived and are not in it. The margin leaves out what reached this node
+ * after the miner had most likely built its block.
+ */
+export function leftWaiting(block: { transactions: { getId(): string }[] }, entries: Record<string, MempoolEntry>, arrivedAt: number): { waiting: number; fees: bigint; vsize: number } {
+  const included = new Set(block.transactions.map((t) => t.getId()));
+  let waiting = 0;
+  let fees = 0n;
+  let vsize = 0;
+  for (const [txid, e] of Object.entries(entries)) {
+    if (included.has(txid) || e.time > arrivedAt - 30) continue;
+    waiting += 1;
+    fees += e.fee;
+    vsize += e.vsize;
+  }
+  return { waiting, fees, vsize };
 }
 
 // Side branches the node stored but did not follow: stale blocks that never
