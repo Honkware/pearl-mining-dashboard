@@ -1,0 +1,58 @@
+#!/usr/bin/env node
+// pearl-mining-dashboard index | serve
+// Both read the node settings from the environment (see src/node.ts) and
+// keep their data in DATA_DIR (./data unless given).
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { Store } from './db.js';
+import { startIndexer } from './indexer.js';
+import { nodeFromEnv } from './node.js';
+
+const log = (line: string): void => console.log(`${new Date().toISOString()} ${line}`);
+
+async function main(): Promise<void> {
+  const cmd = process.argv[2];
+  const dataDir = process.env.DATA_DIR ?? 'data';
+  mkdirSync(dataDir, { recursive: true });
+  if (cmd === 'demo') {
+    const { buildDemo, demoNetwork } = await import('./demo.js');
+    const { serve } = await import('./server.js');
+    const dir = join(dataDir, 'demo');
+    const { chain, store } = await buildDemo(dir, Number(process.env.DEMO_BLOCKS ?? 3600));
+    // The demo chain's clock stands in for now, so ages read as they would on a live node.
+    await serve({ store, network: demoNetwork, dataDir: dir, port: Number(process.env.PORT ?? 8080), host: '127.0.0.1', now: () => chain.time + 60, log });
+    return;
+  }
+  const { client, network } = nodeFromEnv();
+  const store = new Store(join(dataDir, `${network.name}.sqlite`));
+
+  if (cmd === 'index') {
+    const watch = startIndexer({
+      store,
+      rpc: client,
+      network,
+      startHeight: Number(process.env.START_HEIGHT ?? 0),
+      stopAtTip: process.env.STOP_AT_TIP === '1',
+      log,
+    });
+    const stop = (): void => watch.stop();
+    process.on('SIGINT', stop);
+    process.on('SIGTERM', stop);
+    await watch.done;
+    store.close();
+    log('[index] stopped');
+    return;
+  }
+  if (cmd === 'serve') {
+    const { serve } = await import('./server.js');
+    await serve({ store, network, dataDir, port: Number(process.env.PORT ?? 8080), host: process.env.HOST ?? '127.0.0.1', nodeHeight: () => client.getBlockCount(), log });
+    return;
+  }
+  console.error('usage: cli.js index | serve | demo');
+  process.exitCode = 2;
+}
+
+main().catch((err: unknown) => {
+  console.error(err instanceof Error ? err.message : err);
+  process.exitCode = 1;
+});

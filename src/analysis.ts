@@ -1,12 +1,14 @@
-// Window statistics over the store. Windows are anchored at the tip block's
-// timestamp, not the machine's clock, so a node that is behind, or a test
-// chain with its own clock, gives the same answers as a current one.
+// Window statistics over the store. A window is the last N blocks, not a
+// span of clock time: the block count is then fixed, which is what the
+// binomial intervals condition on, and a node that is behind or a test chain
+// with its own clock gives the same answers as a current one. The sizes are
+// a day, a week and 30 days of 194-second blocks.
 import type { PearlNetwork } from 'pearljs';
 import type { Store } from './db.js';
 import { claimedShare, identityName, identityOf, type Claim, type Labels } from './labels.js';
 import { binomialAtLeast, binomialAtMost, countInterval, shareInterval, type Interval } from './stats.js';
 
-export const WINDOWS = { '24h': 86_400, '7d': 7 * 86_400, '30d': 30 * 86_400, all: Infinity } as const;
+export const WINDOWS = { day: 445, week: 3118, month: 13_361, all: Infinity } as const;
 export type WindowName = keyof typeof WINDOWS;
 
 interface BlockRow {
@@ -102,14 +104,10 @@ export function tipTime(ctx: Context): number | null {
 
 /** The window's blocks, plus the one before it, whose timestamp starts the span. */
 function windowBlocks(ctx: Context, window: WindowName): { before: BlockRow | null; blocks: BlockRow[] } {
-  const tip = tipTime(ctx);
-  if (tip === null) return { before: null, blocks: [] };
-  const seconds = WINDOWS[window];
-  // Timestamps are not monotonic: the window is the blocks from the first one stamped inside it.
-  // For "all", the first stored block only starts the span.
-  const all = seconds === Infinity
+  const size = WINDOWS[window];
+  const all = size === Infinity
     ? rows(ctx, `SELECT ${COLUMNS} FROM blocks ORDER BY height`)
-    : rows(ctx, `SELECT ${COLUMNS} FROM blocks WHERE height >= (SELECT MIN(height) FROM blocks WHERE time > ?) - 1 ORDER BY height`, tip - seconds);
+    : rows(ctx, `SELECT ${COLUMNS} FROM blocks ORDER BY height DESC LIMIT ?`, size + 1).reverse();
   const [before, ...blocks] = all;
   return { before: before ?? null, blocks };
 }
@@ -234,19 +232,32 @@ export interface RecentBlock {
   payoutCount: number;
 }
 
-export function recentBlocks(ctx: Context, limit: number, filter?: { id: string }): RecentBlock[] {
-  const list = rows(ctx, `SELECT ${COLUMNS} FROM blocks ORDER BY height DESC LIMIT ?`, filter === undefined ? limit + 1 : 100_000_000);
-  const out: RecentBlock[] = [];
-  for (let i = 0; i < list.length && out.length < limit; i++) {
-    const b = list[i]!;
+/** Newest first. `id` keeps one identity's blocks; `below` pages down from a height. */
+export function recentBlocks(ctx: Context, limit: number, opts: { id?: string; below?: number } = {}): RecentBlock[] {
+  const where: string[] = [];
+  const params: (number | string)[] = [];
+  if (opts.below !== undefined) {
+    where.push('height < ?');
+    params.push(opts.below);
+  }
+  if (opts.id !== undefined) {
+    const scripts = opts.id.startsWith('label:')
+      ? [...ctx.labels.byScript].filter(([, e]) => e.label === opts.id!.slice(6)).map(([script]) => script)
+      : [opts.id.slice(7)];
+    if (scripts.length === 0) return [];
+    where.push(`payout_script IN (${scripts.map(() => '?').join(', ')})`);
+    params.push(...scripts);
+  }
+  const sql = `SELECT ${COLUMNS}, (SELECT p.time FROM blocks p WHERE p.height = blocks.height - 1) AS prev_time FROM blocks
+    ${where.length === 0 ? '' : `WHERE ${where.join(' AND ')}`} ORDER BY height DESC LIMIT ?`;
+  return rows(ctx, sql, ...params, limit).map((b) => {
+    const prevTime = (b as unknown as { prev_time: number | null }).prev_time;
     const id = identityOf(b.payout_script, ctx.labels);
-    if (filter !== undefined && id !== filter.id) continue;
-    const prev = list[i + 1] ?? (b.height > 0 ? rows(ctx, `SELECT ${COLUMNS} FROM blocks WHERE height = ?`, b.height - 1)[0] : undefined);
-    out.push({
+    return {
       height: b.height,
       hash: b.hash,
       time: b.time,
-      interval: prev === undefined ? null : b.time - prev.time,
+      interval: prevTime === null ? null : b.time - prevTime,
       id,
       name: identityName(id, ctx.network),
       reward: b.reward,
@@ -256,9 +267,8 @@ export function recentBlocks(ctx: Context, limit: number, filter?: { id: string 
       certKind: b.cert_kind,
       tag: b.tag,
       payoutCount: b.payout_count,
-    });
-  }
-  return out;
+    };
+  });
 }
 
 export interface SeriesPoint {
@@ -341,4 +351,46 @@ export function stale(ctx: Context): StaleRow[] {
     source: s.source,
     seenAt: s.seen_at,
   }));
+}
+
+/** Seconds between consecutive block timestamps over the window; negative when a miner stamped before its parent. */
+export function intervals(ctx: Context, window: WindowName): number[] {
+  const { before, blocks } = windowBlocks(ctx, window);
+  if (before === null) return [];
+  let prev = before.time;
+  return blocks.map((b) => {
+    const d = b.time - prev;
+    prev = b.time;
+    return d;
+  });
+}
+
+/** Each identity's blocks in consecutive buckets of `per` blocks, oldest first, for sparklines. */
+export function shareHistory(ctx: Context, buckets: number, per: number): { per: number; counts: Map<string, number[]> } {
+  const list = rows(ctx, `SELECT ${COLUMNS} FROM blocks ORDER BY height DESC LIMIT ?`, buckets * per).reverse();
+  const counts = new Map<string, number[]>();
+  const offset = buckets * per - list.length;
+  list.forEach((b, i) => {
+    const id = identityOf(b.payout_script, ctx.labels);
+    const c = counts.get(id) ?? new Array<number>(buckets).fill(0);
+    c[Math.floor((i + offset) / per)]! += 1;
+    counts.set(id, c);
+  });
+  return { per, counts };
+}
+
+/** For an identity with a claim: network blocks between its consecutive blocks, times the claimed share. 1 is par. */
+export function claimEffort(ctx: Context, id: string, share: number, window: WindowName): { height: number; effort: number }[] {
+  const { blocks } = windowBlocks(ctx, window);
+  const out: { height: number; effort: number }[] = [];
+  let since = 0;
+  let started = false;
+  for (const b of blocks) {
+    since += 1;
+    if (identityOf(b.payout_script, ctx.labels) !== id) continue;
+    if (started) out.push({ height: b.height, effort: since * share });
+    started = true;
+    since = 0;
+  }
+  return out;
 }
