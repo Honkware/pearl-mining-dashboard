@@ -147,6 +147,7 @@ export function createApp(opts: ServeOptions): Server {
       if (url.pathname === '/api/network.json') return send(200, 'application/json', json(network(ctx, window)));
       if (url.pathname === '/api/miners.json') return send(200, 'application/json', json({ window, blocks: network(ctx, window)?.blocks ?? 0, miners: miners(ctx, window) }));
       if (url.pathname === '/api/blocks.json') return send(200, 'application/json', json(recentBlocks(ctx, Math.min(1000, Number(url.searchParams.get('limit') ?? 100)))));
+      if (url.pathname === '/api/tip.json') return send(200, 'application/json', json(recentBlocks(ctx, 1)[0] ?? {}));
       if (url.pathname === '/api/stale.json') return send(200, 'application/json', json(stale(ctx)));
       send(404, 'text/plain; charset=utf-8', 'Not found');
     })().catch((err: unknown) => {
@@ -157,8 +158,24 @@ export function createApp(opts: ServeOptions): Server {
   });
 }
 
-export function serve(opts: ServeOptions): Promise<Server> {
+export function serve(opts: ServeOptions & { refreshPools?: boolean }): Promise<Server> {
   const server = createApp(opts);
+  if (opts.refreshPools === true) {
+    // Pool feeds only cover recent blocks and claims age; re-read them every hour.
+    // The labels and claims files are watched, so the pages pick the result up.
+    const run = async (): Promise<void> => {
+      try {
+        const { collectPools, writePools } = await import('./pools.js');
+        const result = await collectPools({ store: opts.store, network: opts.network, dataDir: opts.dataDir, now: Math.floor(Date.now() / 1000) });
+        writePools(opts.dataDir, result);
+        const failed = result.results.filter((r) => r.error !== undefined).map((r) => r.label);
+        opts.log?.(`[pools] refreshed ${result.labels.length} names, ${result.claims.length} claims${failed.length ? `; failed: ${failed.join(', ')}` : ''}`);
+      } catch (err) {
+        opts.log?.(`[pools] refresh failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    };
+    setInterval(() => void run(), 3_600_000).unref();
+  }
   return new Promise((resolve) => {
     server.listen(opts.port, opts.host, () => {
       opts.log?.(`[serve] http://${opts.host}:${opts.port}`);

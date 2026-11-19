@@ -76,7 +76,7 @@ async function main(): Promise<void> {
   if (cmd === 'serve') {
     const { serve } = await import('./server.js');
     void ws.close();
-    await serve({ store, network, dataDir, port: Number(process.env.PORT ?? 8080), host: process.env.HOST ?? '127.0.0.1', nodeHeight: () => client.getBlockCount(), log });
+    await serve({ store, network, dataDir, port: Number(process.env.PORT ?? 8080), host: process.env.HOST ?? '127.0.0.1', nodeHeight: () => client.getBlockCount(), refreshPools: process.env.REFRESH_POOLS !== '0', log });
     return;
   }
   console.error('usage: cli.js index | serve | pools | proof-message | demo');

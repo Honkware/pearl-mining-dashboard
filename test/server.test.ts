@@ -58,3 +58,10 @@ test('unknown pages and miners are 404', async () => {
   expect((await fetch(`${base}/nope`)).status).toBe(404);
   expect((await fetch(`${base}/miner/script%3Aabcd`)).status).toBe(404);
 });
+
+test('the tip endpoint names the newest block, which the page carries for its refresh check', async () => {
+  const tip = (await (await fetch(`${base}/api/tip.json`)).json()) as { height: number; hash: string };
+  const html = await (await fetch(`${base}/`)).text();
+  expect(html).toContain(`data-tip="${tip.hash}"`);
+  expect(tip.height).toBe(63); // 3 premined, then 60
+});

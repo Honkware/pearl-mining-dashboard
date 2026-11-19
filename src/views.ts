@@ -106,7 +106,7 @@ function layout(ctx: PageCtx, title: string, current: string, body: string): str
 <link rel="stylesheet" href="/static/app.css?v=${STYLE_VERSION}">
 <script>try{const t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t}catch{}</script>
 </head>
-<body>
+<body data-tip="${tip?.hash ?? ''}">
 <header class="bar"><div class="wrap">
   <a class="brand" href="/">Pearl mining</a>
   <nav>${nav}</nav>
@@ -118,6 +118,8 @@ ${notice}
 ${body}
 </main>
 <script>
+// Checks for a new block every 15 s and swaps in the fresh page body, keeping the scroll position.
+setInterval(async()=>{try{const t=await (await fetch('/api/tip.json',{cache:'no-store'})).json();if(!t.hash||t.hash===document.body.dataset.tip)return;const html=await (await fetch(location.href,{cache:'no-store'})).text();const doc=new DOMParser().parseFromString(html,'text/html');for(const sel of ['header.bar .status','main']){const a=document.querySelector(sel),b=doc.querySelector(sel);if(a&&b)a.replaceWith(b)}document.body.dataset.tip=t.hash}catch{}},15000);
 document.getElementById('theme').addEventListener('click',()=>{const r=document.documentElement;const dark=r.dataset.theme?r.dataset.theme==='dark':matchMedia('(prefers-color-scheme: dark)').matches;r.dataset.theme=dark?'light':'dark';try{localStorage.setItem('theme',r.dataset.theme)}catch{}});
 </script>
 </body>
