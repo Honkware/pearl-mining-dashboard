@@ -53,6 +53,8 @@ test('a pool whose coinbase was paid out to two miners shows it spent, with two 
 
   const got = receivedFromPools(ctx, hex(testAddress(40, net)));
   expect(got.map((r) => [r.value, r.from])).toEqual([[value / 2n, [`script:${hex(pool)}`]]]);
+  // The pool's change back to itself is not a payment to it.
+  expect(receivedFromPools(ctx, hex(pool))).toEqual([]);
   const html = addressPage({ ...ctx, now: chain.time }, testAddress(40, net))!;
   expect(html).toContain('Payments from pools');
   expect(addressPage({ ...ctx, now: chain.time }, 'not an address')).toBeNull();

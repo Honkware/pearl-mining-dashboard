@@ -22,6 +22,9 @@ This dashboard is the first application built on pearljs, a TypeScript SDK for P
 | `isMoECertificate`, certificate versions | Which proof kind and version each block carries | `src/facts.ts` |
 | `toOutputScript`, `fromOutputScript` | Addresses to payout scripts and back, for labels and pages | `src/labels.ts` |
 | `verifyMessage` | Checks a pool's signed claim to an address | `src/labels.ts` |
+| `PearldClient.getRawMempoolVerbose` | The mempool when each block arrives, for the empty-block check | `src/indexer.ts` |
+| `isValidAddress` | The address pages and address search | `src/views.ts`, `src/server.ts` |
+| `parseBlock`, `PearldClient.getRawBlock` | Re-reading past blocks for their payouts | `src/cli.ts` |
 | `SimulatedChain`, `testAddress`, `testAccount` | Every test, and the demo: miners, reorgs, restarts and coinbase spends without a node | `test/`, `src/demo.ts` |
 | `startRegtest` | The live test against a real pearld | `test-live/regtest.test.ts` |
 
@@ -93,6 +96,16 @@ node --no-warnings=ExperimentalWarning dist/cli.js serve
 
 It listens on 127.0.0.1:8080 (`HOST`, `PORT`) and shows a banner while the indexer is behind the node.
 
+### Older payouts
+
+The indexer records what each coinbase-spending transaction paid as it goes. A store made before that was added fills it in for past blocks with:
+
+```bash
+node --no-warnings=ExperimentalWarning dist/cli.js backfill
+```
+
+It reads only the blocks that hold such transactions, and can be stopped and run again. Whether a block left transactions waiting is only known for blocks seen live.
+
 ### Pool names and claims
 
 ```bash
@@ -133,8 +146,9 @@ All these files are reread when they change.
 
 - `/` headline numbers, the top ten miners, hashrate and block-time charts, latest blocks. `?window=day|week|month|all` picks the last 445, 3,118 or 13,361 blocks, or all of them.
 - `/miners` every miner, with a ranking chart of shares, their likely ranges and what pools say.
-- `/miner/<id>` one miner: its numbers, what the pool says against what it found, its addresses and coinbase text, and transactions that link it to other addresses.
-- `/blocks` every block, newest first.
+- `/miner/<id>` one miner: its numbers, its pool claim against what it found, where its coinbase rewards went (earned, spent, held, how many addresses it paid), its empty blocks and whether transactions were waiting when it mined them, its proof types, its addresses and coinbase tags, and other addresses it shares an owner with.
+- `/address/<address>` one address: what it mined, and the payments it received from transactions that spend pool coinbases. Typing an address into the miners search goes here.
+- `/blocks` every block, newest first, and the stale blocks this node saw.
 
 - `/api/network.json`, `/api/miners.json`, `/api/blocks.json`, `/api/stale.json`.
 
@@ -160,7 +174,7 @@ What it cannot answer: a pool's own share-based hashrate and effort, which addre
 npm test
 ```
 
-27 tests run against `pearljs/testing`'s simulated chain: the statistics against values from scipy, the indexer through reorganisations while running and while stopped, pearljs's block checks, coinbase co-spends, pool naming from feeds, trackers and spending, coinbase tags taken from mainnet blocks, signed names, claims, and the pages. One more runs against a real regtest pearld fed saved blocks (a JSON array of block hex, as `getblock <hash> 0` returns it):
+35 tests run against `pearljs/testing`'s simulated chain: the statistics against values from scipy, the indexer through reorganisations while running and while stopped, pearljs's block checks, coinbase co-spends, pool naming from feeds, trackers and spending, coinbase tags taken from mainnet blocks, signed names, claims, and the pages. One more runs against a real regtest pearld fed saved blocks (a JSON array of block hex, as `getblock <hash> 0` returns it):
 
 ```bash
 PEARLD=/path/to/pearld PEARL_CHAIN=/path/to/saved-blocks.json npx vitest run --config vitest.live.config.ts

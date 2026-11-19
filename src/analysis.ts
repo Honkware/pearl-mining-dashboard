@@ -521,14 +521,22 @@ export interface Received {
   from: string[];
 }
 
-/** Payments to a script from transactions that spend coinbases, newest first. */
+/**
+ * Payments to a script from transactions that spend coinbases, newest first.
+ * Transactions spending the identity's own coinbases are left out: that is
+ * its change coming back, not a payment.
+ */
 export function receivedFromPools(ctx: Context, script: string, limit = 100): Received[] {
+  const own = scriptsOf(ctx, identityOf(script, ctx.labels));
   const q = ctx.store.db.prepare(
     `SELECT o.txid AS txid, o.height AS height, b.time AS time, SUM(o.value) AS value FROM spend_outputs o JOIN blocks b ON b.height = o.height
-     WHERE o.script = ? GROUP BY o.txid ORDER BY o.height DESC LIMIT ?`,
+     WHERE o.script = ? AND NOT EXISTS (
+       SELECT 1 FROM spends s CROSS JOIN payouts p ON p.txid = s.cb_txid AND p.vout = s.cb_vout
+       WHERE s.txid = o.txid AND p.script IN (${own.map(() => '?').join(', ')}))
+     GROUP BY o.txid ORDER BY o.height DESC LIMIT ?`,
   );
   q.setReadBigInts(true);
-  const rowsOut = q.all(script, limit) as { txid: string; height: bigint; time: bigint; value: bigint }[];
+  const rowsOut = q.all(script, ...own, limit) as { txid: string; height: bigint; time: bigint; value: bigint }[];
   const fromQ = ctx.store.db.prepare('SELECT DISTINCT p.script AS script FROM spends s CROSS JOIN payouts p ON p.txid = s.cb_txid AND p.vout = s.cb_vout WHERE s.txid = ?');
   return rowsOut.map((r) => ({
     txid: r.txid,

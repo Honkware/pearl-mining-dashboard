@@ -182,7 +182,7 @@ function claimCell(r: MinerRow): string {
   const c = r.claim;
   if (c === null) return '<td></td>';
   const v = verdict(r);
-  const title = `${c.claim.source}, ${utc(c.claim.readAt).slice(0, 10)}`;
+  const title = `${sourceName(c.claim.source)}, ${utc(c.claim.readAt).slice(0, 10)}`;
   return `<td title="${esc(title)}"><span class="claimed">${pct(c.share)}</span> <span class="${v.fits ? 'tag ok' : 'tag off'}">${v.word}</span></td>`;
 }
 
@@ -390,7 +390,7 @@ ${tile('Proofs', mix.map((m) => m.kind).join(', ') || 'none', mix.map((m) => pct
     claim = `<section class="card">
 <div class="head"><h2>Pool claim</h2><span class="${v.fits ? 'tag ok' : 'tag off'}">${v.word}</span></div>
 <div class="stats inner">
-${tile('Pool claims', pct(c.share), `${esc(c.claim.source)}, ${utc(c.claim.readAt).slice(0, 10)}`)}
+${tile('Pool claims', pct(c.share), `${esc(sourceName(c.claim.source))}, ${utc(c.claim.readAt).slice(0, 10)}`)}
 ${tile('Found on chain', pct(current.share), `${pct(current.shareInterval.lo)} to ${pct(current.shareInterval.hi)}`)}
 ${tile('Blocks expected', int(Math.round(c.expected)), '')}
 ${tile('Blocks found', int(current.blocks), '')}
