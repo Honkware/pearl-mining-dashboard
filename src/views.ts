@@ -92,9 +92,9 @@ function layout(ctx: PageCtx, title: string, current: string, body: string): str
     .join('');
   let notice = '';
   if (tip !== undefined && ctx.nodeHeight != null && ctx.nodeHeight - tip.height > 3) {
-    notice = `<div class="notice">Indexing: block ${int(tip.height)} of ${int(ctx.nodeHeight)}. Numbers cover indexed blocks only.</div>`;
+    notice = `<div class="notice">Syncing: block ${int(tip.height)} of ${int(ctx.nodeHeight)}</div>`;
   } else if (tip !== undefined && ctx.now - tip.time > 3600) {
-    notice = `<div class="notice">Newest block is ${ago(ctx.now - tip.time)} old. Numbers stop at block ${int(tip.height)}.</div>`;
+    notice = `<div class="notice">Syncing: up to ${new Date(tip.time * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })}</div>`;
   }
   return `<!doctype html>
 <html lang="en">
@@ -237,7 +237,6 @@ export function minersPage(ctx: PageCtx, window: WindowName): string {
 <section class="card">
   <div class="head"><h2>Share of blocks</h2><span class="muted">last ${int(net.blocks)} blocks</span>${windowTabs(window, '/miners')}</div>
   ${rankChart(chartRows.map((row) => ({ row, href: minerHref(row.id), label: minerTitle(row).text, mono: minerTitle(row).mono })))}
-  <div class="key"><span><i class="k-dot"></i>found</span><span><i class="k-claim"></i>pool claims, matches</span><span><i class="k-claim off"></i>pool claims, off</span></div>
 </section>
 <section class="card">
   <div class="head"><h2>All miners</h2><span class="muted">${int(rows.length)}</span></div>
