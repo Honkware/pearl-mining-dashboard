@@ -109,6 +109,27 @@ export const POOLS: PoolSource[] = [
   },
 ];
 
+/** A tracker that publishes which address belongs to which pool, for many pools at once. */
+export interface TrackerSource {
+  name: string;
+  urls: string[];
+  parse(bodies: Json[]): { pool: string; address: string }[];
+}
+
+// Read after the pools' own data, in this order; an address already named keeps its name.
+export const TRACKERS: TrackerSource[] = [
+  {
+    name: 'pearlstation.io',
+    urls: ['https://pearlstation.io/api/blocks'],
+    parse: ([b]) => b.recent.filter((x: Json) => x.pool && x.addr).map((x: Json) => ({ pool: x.name, address: x.addr })),
+  },
+  {
+    name: 'pearltrack.io',
+    urls: ['https://pearltrack.io/api/pools'],
+    parse: ([p]) => p.filter((x: Json) => x.address).map((x: Json) => ({ pool: x.name, address: x.address })),
+  },
+];
+
 export interface PoolResult {
   label: string;
   scripts: Map<string, number>;
@@ -160,7 +181,9 @@ export interface PoolsRun {
   conflicts: { script: string; pools: string[] }[];
 }
 
-export async function collectPools(opts: { store: Store; network: PearlNetwork; dataDir: string; now: number; fetch?: typeof fetch; pools?: PoolSource[] }): Promise<PoolsRun> {
+const sameName = (a: string): string => a.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+export async function collectPools(opts: { store: Store; network: PearlNetwork; dataDir: string; now: number; fetch?: typeof fetch; pools?: PoolSource[]; trackers?: TrackerSource[] }): Promise<PoolsRun> {
   const get = opts.fetch ?? fetch;
   const day = new Date(opts.now * 1000).toISOString().slice(0, 10);
   const dir = join(opts.dataDir, 'sources', day);
@@ -186,6 +209,38 @@ export async function collectPools(opts: { store: Store; network: PearlNetwork; 
     }
   }
 
+  const trackerLabels: LabelEntry[] = [];
+  const named = (): Set<string> => new Set([...results.flatMap((r) => [...r.scripts.keys()]), ...trackerLabels.flatMap((l) => l.scripts)]);
+  for (const t of opts.trackers ?? TRACKERS) {
+    try {
+      const bodies: Json[] = [];
+      for (const url of t.urls) {
+        const res = await get(url, { headers: { 'user-agent': 'pearl-mining-dashboard' } });
+        if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+        bodies.push(await res.json());
+      }
+      writeFileSync(join(dir, `${t.name.replace(/[^a-z0-9]+/g, '-')}.json`), JSON.stringify({ tracker: t.name, urls: t.urls, read: opts.now, bodies }));
+      const taken = named();
+      const byPool = new Map<string, string[]>();
+      for (const { pool, address } of t.parse(bodies)) {
+        let script: string;
+        try {
+          script = Buffer.from(toOutputScript(address, opts.network)).toString('hex');
+        } catch {
+          continue;
+        }
+        if (taken.has(script)) continue;
+        // Use the pool's own spelling when the tracker names a pool we already know.
+        const label = results.find((r) => sameName(r.label) === sameName(pool))?.label ?? pool;
+        byPool.set(label, [...new Set([...(byPool.get(label) ?? []), script])]);
+        taken.add(script);
+      }
+      for (const [label, scripts] of byPool) trackerLabels.push({ label, scripts, source: `${t.name}, read ${day}` });
+    } catch (err) {
+      results.push({ label: t.name, scripts: new Map(), matched: 0, published: 0, kind: 'blocks', error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
   const owners = new Map<string, string[]>();
   for (const r of results) for (const s of r.scripts.keys()) owners.set(s, [...(owners.get(s) ?? []), r.label]);
   const conflicts = [...owners].filter(([, p]) => p.length > 1).map(([script, pools]) => ({ script, pools }));
@@ -201,7 +256,8 @@ export async function collectPools(opts: { store: Store; network: PearlNetwork; 
       scripts: [...r.scripts.keys()].filter((s) => !contested.has(s) && s !== 'none'),
       source: `${POOLS.find((p) => p.label === r.label)?.site ?? r.label}, read ${day}, ${evidenceText(r)}`,
     }))
-    .filter((l) => l.scripts.length > 0);
+    .filter((l) => l.scripts.length > 0)
+    .concat(trackerLabels);
   const claims = results.flatMap((r) => (r.claim === undefined ? [] : [r.claim]));
   return { results, labels, claims, conflicts };
 }
