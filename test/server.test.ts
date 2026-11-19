@@ -70,5 +70,6 @@ test('the miners page finds a pool by name and keeps its overall rank', async ()
   const html = await (await fetch(`${base}/miners?window=all&q=big`)).text();
   expect(html).toContain('Big pool');
   expect(html).toContain('1 of 3'); // the two test miners and the chain's own premine address
-  expect(html).not.toContain(testAddress(20, net).slice(0, 10));
+  // The search filters the table; the share chart above it still shows every miner.
+  expect(html.match(/<td class="rank">/g)).toHaveLength(1);
 });
