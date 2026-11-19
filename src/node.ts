@@ -2,14 +2,16 @@
 // its own self-signed rpc.cert, which Node's fetch only accepts through
 // undici; this uses node:https with the certificate as the CA instead.
 import { readFileSync } from 'node:fs';
-import { request } from 'node:https';
+import { Agent, request } from 'node:https';
 import { PearldClient, networks, type PearlNetwork, type PearlNetworkName } from 'pearljs';
 
 function caFetch(ca: string): typeof globalThis.fetch {
+  // One kept-alive connection: a TLS handshake per request was most of the indexer's time.
+  const agent = new Agent({ ca, keepAlive: true, maxSockets: 4 });
   return (input, init = {}) =>
     new Promise<Response>((resolve, reject) => {
       const headers = Object.fromEntries(new Headers(init.headers));
-      const req = request(String(input), { method: init.method ?? 'GET', headers, ca, ...(init.signal ? { signal: init.signal } : {}) }, (res) => {
+      const req = request(String(input), { method: init.method ?? 'GET', headers, agent, ...(init.signal ? { signal: init.signal } : {}) }, (res) => {
         const chunks: Uint8Array[] = [];
         res.on('data', (chunk: Uint8Array) => chunks.push(chunk));
         res.on('error', reject);
