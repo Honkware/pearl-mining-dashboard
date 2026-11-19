@@ -72,7 +72,18 @@ export const DEFAULT_TAG = '/P2SH/pearld/';
  * the height or extra nonce that happen to be printable ("Yj/pearl-pool/") fall
  * away. A run with no slashes is kept when it reads like a sentence.
  */
+// Pools write the same few tags on thousands of blocks; each distinct one is cleaned once.
+const cleaned = new Map<string, string>();
 export function cleanTag(raw: string): string {
+  let v = cleaned.get(raw);
+  if (v === undefined) {
+    if (cleaned.size > 100_000) cleaned.clear();
+    cleaned.set(raw, (v = cleanTagOnce(raw)));
+  }
+  return v;
+}
+
+function cleanTagOnce(raw: string): string {
   if (raw.includes('/')) {
     const names = raw
       .split(/[/\s]+/)

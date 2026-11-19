@@ -351,7 +351,20 @@ export interface Links {
   coSpent: { txid: string; height: number; with: string[] }[];
 }
 
+// Like the payout audit, a big pool's links read thousands of transactions and change slowly.
+const linkCache = new Map<string, { at: number; links: Links }>();
+
 export function links(ctx: Context, id: string): Links {
+  const key = `${id}|${scriptsOf(ctx, id).length}`;
+  const hit = linkCache.get(key);
+  if (hit !== undefined && Date.now() - hit.at < 600_000) return hit.links;
+  const found = findLinks(ctx, id);
+  if (linkCache.size > 2000) linkCache.clear();
+  linkCache.set(key, { at: Date.now(), links: found });
+  return found;
+}
+
+function findLinks(ctx: Context, id: string): Links {
   const scripts = scriptsOf(ctx, id);
   if (scripts.length === 0) return { coSpent: [] };
   // Transactions that spend this miner's coinbases, with every coinbase each of them spends.
@@ -441,8 +454,22 @@ export interface PayoutAudit {
   lastSpend: { height: number; time: number } | null;
 }
 
+// A big pool's audit reads up to a million payout outputs (over a second), and
+// its totals barely move between blocks, so each one is kept for ten minutes.
+const audits = new Map<string, { at: number; audit: PayoutAudit | null }>();
+
 /** Where an identity's coinbase rewards went, as far as the indexed chain shows. */
 export function payoutAudit(ctx: Context, id: string): PayoutAudit | null {
+  const key = `${id}|${scriptsOf(ctx, id).length}`;
+  const hit = audits.get(key);
+  if (hit !== undefined && Date.now() - hit.at < 600_000) return hit.audit;
+  const audit = computeAudit(ctx, id);
+  if (audits.size > 2000) audits.clear();
+  audits.set(key, { at: Date.now(), audit });
+  return audit;
+}
+
+function computeAudit(ctx: Context, id: string): PayoutAudit | null {
   const scripts = scriptsOf(ctx, id);
   if (scripts.length === 0) return null;
   const marks = scripts.map(() => '?').join(', ');
@@ -545,4 +572,35 @@ export function certificateMix(ctx: Context, id: string, window: WindowName): { 
     counts.set(k, (counts.get(k) ?? 0) + 1);
   }
   return [...counts].map(([kind, n]) => ({ kind, blocks: n })).sort((a, b) => b.blocks - a.blocks);
+}
+
+export interface AllTime {
+  id: string;
+  name: string;
+  labelled: boolean;
+  blocks: number;
+  lastHeight: number;
+  lastTime: number;
+  tags: string[];
+  paysOut: boolean;
+}
+
+/** One identity over every indexed block, read for it alone. */
+export function allTime(ctx: Context, id: string): AllTime | null {
+  const scripts = scriptsOf(ctx, id);
+  if (scripts.length === 0) return null;
+  const marks = scripts.map(() => '?').join(', ');
+  const s = ctx.store.db
+    .prepare(`SELECT COUNT(*) AS n, MAX(height) AS h FROM blocks WHERE payout_script IN (${marks})`)
+    .get(...scripts) as { n: number; h: number | null };
+  if (s.n === 0 || s.h === null) return null;
+  const last = ctx.store.db.prepare('SELECT time FROM blocks WHERE height = ?').get(s.h) as { time: number };
+  const tags = (ctx.store.db.prepare(`SELECT tag FROM blocks WHERE payout_script IN (${marks})`).all(...scripts) as { tag: string | null }[]).map((r) => r.tag);
+  const labelled = id.startsWith('label:');
+  const paysOut =
+    !labelled &&
+    ctx.store.db
+      .prepare(`SELECT 1 FROM payouts p CROSS JOIN spends s ON s.cb_txid = p.txid AND s.cb_vout = p.vout WHERE p.script IN (${marks}) AND s.outputs >= 10 LIMIT 1`)
+      .get(...scripts) !== undefined;
+  return { id, name: identityName(id, ctx.network), labelled, blocks: s.n, lastHeight: s.h, lastTime: last.time, tags: commonTags(tags), paysOut };
 }

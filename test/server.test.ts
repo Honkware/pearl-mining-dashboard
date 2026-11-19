@@ -78,3 +78,14 @@ test('the miners page finds a pool by name and keeps its overall rank', async ()
   // The search filters the table; the share chart above it still shows every miner.
   expect(html.match(/<td class="rank">/g)).toHaveLength(1);
 });
+
+test('bad requests get plain answers, not server errors', async () => {
+  expect((await fetch(`${base}/miner/%E0%A4%A`)).status).toBe(404);
+  expect((await fetch(`${base}/address/%zz`)).status).toBe(404);
+  expect((await fetch(`${base}/api/blocks.json?limit=abc`)).status).toBe(200);
+  expect((await fetch(`${base}/blocks?below=nope`)).status).toBe(200);
+  expect((await fetch(`${base}/`, { method: 'POST' })).status).toBe(405);
+  const res = await fetch(`${base}/`);
+  expect(res.headers.get('content-security-policy')).toContain("default-src 'self'");
+  expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+});

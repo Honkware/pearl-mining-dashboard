@@ -3,6 +3,7 @@
 import { fromOutputScript, isValidAddress, toOutputScript } from 'pearljs';
 import {
   WINDOWS,
+  allTime,
   certificateMix,
   emptyBlocks,
   payoutAudit,
@@ -311,7 +312,7 @@ export function addressPage(ctx: PageCtx, address: string): string | null {
   if (!isValidAddress(address, ctx.network)) return null;
   const script = Buffer.from(toOutputScript(address, ctx.network)).toString('hex');
   const id = ctx.labels.byScript.has(script) ? `label:${ctx.labels.byScript.get(script)!.label}` : `script:${script}`;
-  const mined = miners(ctx, 'all').find((r) => r.id === id && r.blocks > 0);
+  const mined = allTime(ctx, id);
   const got = receivedFromPools(ctx, script);
   const total = got.reduce((s, r) => s + r.value, 0n);
   const tile = (k: string, v: string, sub: string): string => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
@@ -324,7 +325,7 @@ export function addressPage(ctx: PageCtx, address: string): string | null {
   return layout(ctx, `${short(address)}: Pearl mining`, '', `
 <div class="title"><h1 class="mono">${esc(address)}</h1></div>
 <div class="stats">
-${tile('Mined', mined === undefined ? 'no blocks' : `${int(mined.blocks)} blocks`, mined === undefined ? '' : `<a href="${minerHref(mined.id)}">${esc(minerTitle(mined).text)}</a>`)}
+${tile('Mined', mined === null ? 'no blocks' : `${int(mined.blocks)} blocks`, mined === null ? '' : `<a href="${minerHref(mined.id)}">${esc(minerTitle(mined).text)}</a>`)}
 ${tile('Received from pools', `${prl(total, 2)} PRL`, `${int(got.length)} payments${got.length === 100 ? ' (latest 100)' : ''}`)}
 ${tile('Paid by', byPool.size === 0 ? 'none' : [...byPool.keys()].map(name).slice(0, 3).join(', '), '')}
 </div>
@@ -345,8 +346,8 @@ ${staleSection(ctx)}`);
 }
 
 export function minerPage(ctx: PageCtx, id: string, window: WindowName): string | null {
-  const all = miners(ctx, 'all').find((r) => r.id === id);
-  if (all === undefined) return null;
+  const all = allTime(ctx, id);
+  if (all === null) return null;
   const current = miners(ctx, window).find((r) => r.id === id);
   const net = network(ctx, window);
   const entry = id.startsWith('label:') ? ctx.labels.entries.find((e) => e.label === all.name) : undefined;

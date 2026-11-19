@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PearlNetwork } from 'pearljs';
-import { WINDOWS, miners, network, recentBlocks, stale, type WindowName } from './analysis.js';
+import { WINDOWS, miners, network, payoutAudit, recentBlocks, stale, type WindowName } from './analysis.js';
 import type { Store } from './db.js';
 import { loadClaims, loadLabels, loadSignedNames, mergeLabels, type Claim, type Labels } from './labels.js';
 import { addressPage, blocksPage, minerPage, minersPage, overview, type PageCtx } from './views.js';
@@ -57,6 +57,29 @@ function watched<T>(path: string, load: () => T): () => T {
 
 const json = (v: unknown): string => JSON.stringify(v, (_k, x: unknown) => (typeof x === 'bigint' ? x.toString() : x), 1);
 
+// Inline scripts are the page's own (theme, chart hover, refresh); nothing loads from elsewhere.
+const HEADERS = {
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+  'x-frame-options': 'DENY',
+  'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+};
+const CACHE_LIMIT = 300;
+
+/** A whole number from a query parameter, inside [min, max], or the fallback. */
+function intParam(v: string | null, fallback: number, min: number, max: number): number {
+  const n = v === null ? NaN : Number(v);
+  return Number.isInteger(n) ? Math.min(max, Math.max(min, n)) : fallback;
+}
+
+function decoded(path: string): string | null {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return null;
+  }
+}
+
 export function createApp(opts: ServeOptions): Server {
   const file = (name: string): string => join(opts.dataDir, name);
   const handLabels = watched<Labels>(file('labels.json'), () => loadLabels(file('labels.json'), opts.network));
@@ -87,10 +110,16 @@ export function createApp(opts: ServeOptions): Server {
   const warm = (ctx: PageCtx): void => {
     const tip = cacheTip;
     const paths = (Object.keys(WINDOWS) as WindowName[]).map((w) => [`/?window=${w}`, w] as const);
+    // Then the payout audits of the week's biggest miners, the slowest part of their pages.
+    const top = miners(ctx, 'week').slice(0, 10).map((r) => r.id);
     const next = (i: number): void => {
-      if (i >= paths.length || cacheTip !== tip) return;
-      const [path, w] = paths[i]!;
-      if (!cache.has(cacheKey(path, ctx))) cache.set(cacheKey(path, ctx), overview(ctx, w));
+      if (cacheTip !== tip) return;
+      if (i < paths.length) {
+        const [path, w] = paths[i]!;
+        if (!cache.has(cacheKey(path, ctx))) cache.set(cacheKey(path, ctx), overview(ctx, w));
+      } else if (i < paths.length + top.length) {
+        payoutAudit(ctx, top[i - paths.length]!);
+      } else return;
       setImmediate(() => next(i + 1));
     };
     setImmediate(() => next(0));
@@ -98,11 +127,16 @@ export function createApp(opts: ServeOptions): Server {
 
   return createServer((req, res) => {
     void (async () => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.writeHead(405, { allow: 'GET, HEAD', ...HEADERS });
+        res.end();
+        return;
+      }
       const url = new URL(req.url ?? '/', 'http://localhost');
       const asset = STATIC[url.pathname];
       if (asset !== undefined) {
         // Fonts never change; the stylesheet does between releases.
-        res.writeHead(200, { 'content-type': asset.type, 'cache-control': asset.type === 'font/woff2' ? 'public, max-age=86400' : 'no-cache' });
+        res.writeHead(200, { 'content-type': asset.type, 'cache-control': asset.type === 'font/woff2' ? 'public, max-age=86400' : 'no-cache', ...HEADERS });
         res.end(readFileSync(asset.path));
         return;
       }
@@ -124,24 +158,33 @@ export function createApp(opts: ServeOptions): Server {
       const w = url.searchParams.get('window') ?? 'week';
       const window: WindowName = w in WINDOWS ? (w as WindowName) : 'week';
       const send = (status: number, type: string, body: string): void => {
-        res.writeHead(status, { 'content-type': type, 'cache-control': 'no-cache' });
-        res.end(body);
+        res.writeHead(status, { 'content-type': type, 'cache-control': 'no-cache', ...HEADERS });
+        res.end(req.method === 'HEAD' ? undefined : body);
+      };
+      const notFound = (): void => send(404, 'text/plain; charset=utf-8', 'Not found');
+      // Searches are not cached, and the cache is bounded, so arbitrary query strings cannot fill memory.
+      const cached = (make: () => string | null): string | null => {
+        const k = cacheKey(key, ctx);
+        const hit = cache.get(k);
+        if (hit !== undefined) return hit;
+        const made = make();
+        if (made !== null && !url.searchParams.has('q')) {
+          if (cache.size >= CACHE_LIMIT) cache.clear();
+          cache.set(k, made);
+        }
+        return made;
       };
       const page = (make: () => string | null): void => {
-        const k = cacheKey(key, ctx);
-        let html = cache.get(k) ?? null;
-        if (html === null) {
-          html = make();
-          if (html !== null) cache.set(k, html);
-        }
-        if (html === null) send(404, 'text/plain; charset=utf-8', 'Not found');
+        const html = cached(make);
+        if (html === null) notFound();
         else send(200, 'text/html; charset=utf-8', html);
       };
+      const api = (make: () => unknown): void => send(200, 'application/json', cached(() => json(make()))!);
 
       if (url.pathname === '/') return page(() => overview(ctx, window));
       if (url.pathname === '/blocks') {
         const below = url.searchParams.get('below');
-        return page(() => blocksPage(ctx, below === null ? null : Number(below)));
+        return page(() => blocksPage(ctx, below === null ? null : intParam(below, 0, 0, Number.MAX_SAFE_INTEGER)));
       }
       const q = url.searchParams.get('q')?.trim() ?? '';
       if (url.pathname === '/miners' && q !== '' && isValidAddress(q, opts.network)) {
@@ -149,15 +192,21 @@ export function createApp(opts: ServeOptions): Server {
         res.end();
         return;
       }
-      if (url.pathname.startsWith('/address/')) return page(() => addressPage(ctx, decodeURIComponent(url.pathname.slice(9))));
-      if (url.pathname === '/miners') return page(() => minersPage(ctx, window, url.searchParams.get('q') ?? '', Number(url.searchParams.get('page') ?? 1) || 1));
-      if (url.pathname.startsWith('/miner/')) return page(() => minerPage(ctx, decodeURIComponent(url.pathname.slice(7)), window));
-      if (url.pathname === '/api/network.json') return send(200, 'application/json', json(network(ctx, window)));
-      if (url.pathname === '/api/miners.json') return send(200, 'application/json', json({ window, blocks: network(ctx, window)?.blocks ?? 0, miners: miners(ctx, window) }));
-      if (url.pathname === '/api/blocks.json') return send(200, 'application/json', json(recentBlocks(ctx, Math.min(1000, Number(url.searchParams.get('limit') ?? 100)))));
+      if (url.pathname.startsWith('/address/')) {
+        const address = decoded(url.pathname.slice(9));
+        return address === null ? notFound() : page(() => addressPage(ctx, address));
+      }
+      if (url.pathname === '/miners') return page(() => minersPage(ctx, window, q.slice(0, 100), intParam(url.searchParams.get('page'), 1, 1, 100_000)));
+      if (url.pathname.startsWith('/miner/')) {
+        const id = decoded(url.pathname.slice(7));
+        return id === null ? notFound() : page(() => minerPage(ctx, id, window));
+      }
+      if (url.pathname === '/api/network.json') return api(() => network(ctx, window));
+      if (url.pathname === '/api/miners.json') return api(() => ({ window, blocks: network(ctx, window)?.blocks ?? 0, miners: miners(ctx, window) }));
+      if (url.pathname === '/api/blocks.json') return api(() => recentBlocks(ctx, intParam(url.searchParams.get('limit'), 100, 1, 1000)));
       if (url.pathname === '/api/tip.json') return send(200, 'application/json', json(recentBlocks(ctx, 1)[0] ?? {}));
-      if (url.pathname === '/api/stale.json') return send(200, 'application/json', json(stale(ctx)));
-      send(404, 'text/plain; charset=utf-8', 'Not found');
+      if (url.pathname === '/api/stale.json') return api(() => stale(ctx));
+      notFound();
     })().catch((err: unknown) => {
       opts.log?.(`[serve] ${req.url}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
