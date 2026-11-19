@@ -66,14 +66,19 @@ const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString('hex');
 export const DEFAULT_TAG = '/P2SH/pearld/';
 
 /**
- * The miner's own text out of the printable runs of a coinbase script: its
- * /tags/ other than pearld's default, or else a run that reads like words.
- * Printable bytes of the height or extra nonce ("Yj/pearl-pool/", "m~T'") fall away.
+ * The miner's own words out of the printable runs of a coinbase script: the
+ * parts between slashes that read as names (5 or more characters, 3 of them
+ * letters), other than pearld's default flag, as "/pool.kryptex.com/". Bytes of
+ * the height or extra nonce that happen to be printable ("Yj/pearl-pool/") fall
+ * away. A run with no slashes is kept when it reads like a sentence.
  */
 export function cleanTag(raw: string): string {
-  const tags = (raw.match(/\/[^\s/]+(?:\/[^\s/]+)*\//g) ?? []).filter((t) => t !== DEFAULT_TAG);
-  if (tags.length > 0) return [...new Set(tags)].join(' ');
-  if (raw.includes(DEFAULT_TAG)) return '';
+  if (raw.includes('/')) {
+    const names = raw
+      .split(/[/\s]+/)
+      .filter((t) => /^[A-Za-z0-9][A-Za-z0-9._-]{4,}$/.test(t) && (t.match(/[A-Za-z]/g) ?? []).length >= 3 && t !== 'pearld' && t !== 'P2SH');
+    return [...new Set(names)].map((t) => `/${t}/`).join(' ');
+  }
   const words = raw.match(/[A-Za-z][A-Za-z0-9 .,'-]{7,}/g);
   return words === null ? '' : words.join(' ').trim();
 }

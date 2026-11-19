@@ -277,6 +277,16 @@ export function minersPage(ctx: PageCtx, window: WindowName, query = '', page = 
 </section>`);
 }
 
+/** A label's source as a short name: the site of a URL, or the text up to its first comma. */
+function sourceName(source: string): string {
+  const first = source.split(',')[0]!.trim();
+  try {
+    return new URL(first).host.replace(/^www\./, '');
+  } catch {
+    return first;
+  }
+}
+
 function staleSection(ctx: PageCtx): string {
   const list = stale(ctx);
   if (list.length === 0) return '';
@@ -386,24 +396,20 @@ ${tile('Blocks found', int(current.blocks), '')}
 </div>
 </section>`;
   }
-  const l = links(ctx, id);
-  const linkItems = [
-    ...l.coSpent.slice(0, 10).map((c) => `<li>Spent together with ${c.with.map((w) => minerLink(w, w.startsWith('label:') ? w.slice(6) : w)).join(', ')} in block ${int(c.height)}</li>`),
-    ...l.fanOut.slice(0, 10).map((c) => `<li>Paid out to ${int(c.outputs)} addresses in block ${int(c.height)}</li>`),
-  ];
+  const linked = links(ctx, id).coSpent;
+  const others = [...new Set(linked.flatMap((c) => c.with))];
+  const addressCard = `<section class="card"><div class="head"><h2>Addresses</h2>${entry !== undefined ? `<span class="muted">${esc(sourceName(entry.source))}</span>` : ''}</div>
+<ul class="plain">${addresses.map((a) => `<li class="mono"><a href="/address/${esc(a)}">${esc(a)}</a></li>`).join('')}</ul>
+${all.tags.length > 0 ? `<div class="tags">${all.tags.map((t) => `<span class="chip">${esc(t.replace(/^\/+|\/+$/g, ''))}</span>`).join('')}</div>` : ''}</section>`;
+  const linkCard = others.length === 0 ? '' : `<section class="card"><div class="head"><h2>Same owner as</h2></div>
+<ul class="plain">${others.slice(0, 20).map((w) => `<li>${minerLink(w, w.startsWith('label:') ? w.slice(6) : addressOf(w.slice(7), ctx))}</li>`).join('')}</ul></section>`;
   return layout(ctx, `${all.labelled ? all.name : short(all.name)}: Pearl mining`, '/miners', `
 <div class="title"><h1 class="${all.labelled ? '' : 'mono'}">${esc(all.labelled ? all.name : all.name)}</h1>${windowTabs(window, minerHref(id))}</div>
 ${statsRow}
 ${claim}
 ${paidOut}
 ${blockFacts}
-<div class="grid even">
-<section class="card"><div class="head"><h2>Addresses</h2><span class="muted">${entry !== undefined ? esc(entry.source) : ''}</span></div>
-<ul class="plain">${addresses.map((a) => `<li class="mono"><a href="/address/${esc(a)}">${esc(a)}</a></li>`).join('')}</ul>
-${all.tags.length > 0 ? `<p class="muted">Coinbase text: ${all.tags.map((t) => `"${esc(t)}"`).join(', ')}</p>` : ''}</section>
-<section class="card"><div class="head"><h2>Linked by spending</h2></div>
-${linkItems.length === 0 ? '<p class="muted">None</p>' : `<ul class="plain">${linkItems.join('')}</ul>`}</section>
-</div>
+${linkCard === '' ? addressCard : `<div class="grid even">${addressCard}${linkCard}</div>`}
 <section class="card"><div class="head"><h2>Latest blocks</h2></div>
 <div class="scroll"><table>${BLOCK_HEAD}<tbody>${blockRows(ctx, recentBlocks(ctx, 15, { id }))}</tbody></table></div></section>`);
 }

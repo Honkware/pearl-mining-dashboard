@@ -96,6 +96,21 @@ function rows(ctx: Context, sql: string, ...params: (number | string)[]): BlockR
 
 const COLUMNS = 'height, hash, time, bits, difficulty, work, cert_version, cert_kind, tx_count, vsize, reward, subsidy, tag, payout_script, payout_count';
 
+/**
+ * The tags a miner writes again and again, most used first. Each block's tag
+ * often carries a few stray bytes of its extra nonce, so a variant seen in
+ * fewer than 2 blocks, or under 5% of them, is noise.
+ */
+function commonTags(raw: (string | null)[]): string[] {
+  const counts = new Map<string, number>();
+  for (const r of raw) {
+    if (r === null) continue;
+    for (const t of cleanTag(r).split(' ')) if (t !== '' && t !== DEFAULT_TAG) counts.set(t, (counts.get(t) ?? 0) + 1);
+  }
+  const floor = Math.max(2, raw.length * 0.05);
+  return [...counts].filter(([, n]) => n >= floor || raw.length === 1).sort((a, b) => b[1] - a[1]).map(([t]) => t);
+}
+
 export function tipTime(ctx: Context): number | null {
   const row = ctx.store.db.prepare('SELECT time FROM blocks ORDER BY height DESC LIMIT 1').get() as { time: number } | undefined;
   return row?.time ?? null;
@@ -210,7 +225,7 @@ export function miners(ctx: Context, window: WindowName): MinerRow[] {
       empty: g.blocks.filter((b) => b.tx_count === 1).length,
       lastTime: last.time,
       lastHeight: last.height,
-      tags: [...new Set(g.blocks.map((b) => (b.tag === null ? null : cleanTag(b.tag))).filter((t): t is string => t !== null && t !== '' && t !== DEFAULT_TAG))],
+      tags: commonTags(g.blocks.map((b) => b.tag)),
       paysOut: !labelled && [...g.scripts].some((s) => payers.has(s)),
       claim: test,
     });
@@ -333,36 +348,31 @@ export function series(ctx: Context, window: WindowName, per: number): SeriesPoi
 export interface Links {
   /** Transactions that spent coinbase outputs of this identity together with another's. */
   coSpent: { txid: string; height: number; with: string[] }[];
-  /** Transactions spending this identity's coinbase outputs into many outputs, as a pool paying its miners does. */
-  fanOut: { txid: string; height: number; outputs: number }[];
 }
 
-export function links(ctx: Context, id: string, fanOutAt = 10): Links {
+export function links(ctx: Context, id: string): Links {
   const scripts = scriptsOf(ctx, id);
-  if (scripts.length === 0) return { coSpent: [], fanOut: [] };
+  if (scripts.length === 0) return { coSpent: [] };
   // Transactions that spend this miner's coinbases, with every coinbase each of them spends.
   const spends = ctx.store.db
     .prepare(
-      `SELECT s.txid, s.height, s.outputs, p.script FROM spends s CROSS JOIN payouts p ON p.txid = s.cb_txid AND p.vout = s.cb_vout
+      `SELECT s.txid, s.height, p.script FROM spends s CROSS JOIN payouts p ON p.txid = s.cb_txid AND p.vout = s.cb_vout
        WHERE s.txid IN (SELECT s2.txid FROM payouts p2 CROSS JOIN spends s2 ON s2.cb_txid = p2.txid AND s2.cb_vout = p2.vout
                         WHERE p2.script IN (${scripts.map(() => '?').join(', ')}))
        ORDER BY s.height DESC`,
     )
-    .all(...scripts) as { txid: string; height: number; outputs: number; script: string }[];
-  const byTx = new Map<string, { height: number; outputs: number; ids: Set<string> }>();
+    .all(...scripts) as { txid: string; height: number; script: string }[];
+  const byTx = new Map<string, { height: number; ids: Set<string> }>();
   for (const s of spends) {
-    const t = byTx.get(s.txid) ?? { height: s.height, outputs: s.outputs, ids: new Set() };
+    const t = byTx.get(s.txid) ?? { height: s.height, ids: new Set() };
     t.ids.add(identityOf(s.script, ctx.labels));
     byTx.set(s.txid, t);
   }
   const coSpent: Links['coSpent'] = [];
-  const fanOut: Links['fanOut'] = [];
   for (const [txid, t] of byTx) {
-    if (!t.ids.has(id)) continue;
-    if (t.ids.size > 1) coSpent.push({ txid, height: t.height, with: [...t.ids].filter((x) => x !== id) });
-    if (t.outputs >= fanOutAt) fanOut.push({ txid, height: t.height, outputs: t.outputs });
+    if (t.ids.has(id) && t.ids.size > 1) coSpent.push({ txid, height: t.height, with: [...t.ids].filter((x) => x !== id) });
   }
-  return { coSpent, fanOut };
+  return { coSpent };
 }
 
 export interface StaleRow {

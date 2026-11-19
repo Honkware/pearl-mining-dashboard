@@ -14,6 +14,13 @@ test("pearld's default flag and noise around it leave nothing", () => {
   expect(cleanTag('Y<Mf')).toBe('');
 });
 
+test("a pool's tag is kept and the extra-nonce bytes around it are not", () => {
+  expect(cleanTag('/&%j/pool.kryptex.com/')).toBe('/pool.kryptex.com/');
+  expect(cleanTag('/pool.kryptex.com/NOCKCHAIN-AI-POW-AUX/')).toBe('/pool.kryptex.com/ /NOCKCHAIN-AI-POW-AUX/');
+  expect(cleanTag('/pool.kryptex.com/ /[D5/')).toBe('/pool.kryptex.com/');
+  expect(cleanTag('/F2Pool/')).toBe('/F2Pool/');
+});
+
 test('a message in plain words is kept', () => {
   expect(cleanTag('The native currency for machines and humans. Total')).toBe('The native currency for machines and humans. Total');
 });
