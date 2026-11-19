@@ -145,14 +145,15 @@ export function intervalHistogram(intervals: number[], target: number, width = 5
   const hover: Hover = [];
   counts.forEach((c, i) => {
     parts.push(`<rect class="bar" x="${f(pad.l + i * bw + 1)}" y="${f(y(c))}" width="${f(bw - 2)}" height="${f(y(0) - y(c))}"/>`);
-    const range = i === bins - 1 ? `${Math.round(i * binW)} s or more` : `${Math.round(i * binW)} to ${Math.round((i + 1) * binW)} s`;
+    const range = i === bins - 1 ? `${Math.round(i * binW)} s or longer` : `${Math.round(i * binW)} to ${Math.round((i + 1) * binW)} s`;
     hover.push({ x: pad.l + (i + 0.5) * bw, y: y(c), text: [range, `${c.toLocaleString('en-US')} blocks`, `${Math.round(expected[i]!).toLocaleString('en-US')} expected`] });
   });
   const curve = expected.map((e, i) => `${i === 0 ? 'M' : 'L'}${f(pad.l + (i + 0.5) * bw)} ${f(y(e))}`).join('');
   parts.push(`<path class="expect" d="${curve}"/>`);
   parts.push(`<line class="axis" x1="${pad.l}" x2="${width - pad.r}" y1="${f(y(0))}" y2="${f(y(0))}"/>`);
-  for (const k of [0, 4, 8, 12, 16]) parts.push(`<text class="tick" x="${f(pad.l + k * bw)}" y="${height - 4}" text-anchor="middle">${Math.round(k * binW)}</text>`);
-  parts.push(`<text class="tick" x="${width - pad.r}" y="${height - 4}" text-anchor="end">${Math.round(bins * binW)}+</text>`);
+  const mmss = (sec: number): string => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
+  for (const k of [0, 4, 8, 12, 16]) parts.push(`<text class="tick" x="${f(pad.l + k * bw)}" y="${height - 4}" text-anchor="middle">${mmss(k * binW)}</text>`);
+  parts.push(`<text class="tick" x="${width - pad.r}" y="${height - 4}" text-anchor="end">${mmss(bins * binW)}+</text>`);
   parts.push(cursor(pad.t, height - pad.b));
   return `<svg class="chart hist" viewBox="0 0 ${width} ${height}" role="img" aria-label="Block interval histogram"${hoverAttr(hover)}>${parts.join('')}</svg>`;
 }

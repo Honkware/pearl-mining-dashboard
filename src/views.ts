@@ -260,7 +260,7 @@ export function minersPage(ctx: PageCtx, window: WindowName, query = '', page = 
 <div class="pagebar"><span class="muted">Last ${int(net.blocks)} blocks</span>${windowTabs(window, '/miners')}</div>
 <section class="card">
   <div class="head"><h2>Share of blocks</h2></div>
-  ${rankChart(chartRows.map((row) => ({ row, href: minerHref(row.id), label: minerTitle(row).text, mono: minerTitle(row).mono })))}
+  ${rankChart(chartRows.map((row) => ({ row, href: minerHref(row.id), label: minerTitle(row).text, mono: minerTitle(row).mono })), 1160)}
 </section>
 <section class="card">
   <div class="head"><h2>Miners</h2><span class="muted">${q ? `${int(found.length)} of ${int(rows.length)}` : int(rows.length)}</span>
