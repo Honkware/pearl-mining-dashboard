@@ -62,8 +62,21 @@ export interface PageCtx extends Context {
   nodeHeight?: number | null;
 }
 
+/** What a miner is called on the page: its label, its coinbase tag, "Unnamed pool", or its address. */
+function minerTitle(r: Pick<MinerRow, 'name' | 'labelled' | 'tags' | 'paysOut'>): { text: string; mono: boolean } {
+  if (r.labelled) return { text: r.name, mono: false };
+  if (r.tags.length > 0) return { text: r.tags[0]!, mono: false };
+  if (r.paysOut) return { text: 'Unnamed pool', mono: false };
+  return { text: short(r.name), mono: true };
+}
+
 function short(name: string): string {
   return name.length > 22 ? `${name.slice(0, 10)}…${name.slice(-6)}` : name;
+}
+
+function titleLink(r: MinerRow): string {
+  const t = minerTitle(r);
+  return `<a class="who${t.mono ? ' mono' : ''}" href="${minerHref(r.id)}" title="${esc(r.name)}">${esc(t.text)}</a>`;
 }
 
 function minerLink(id: string, name: string, labelled = id.startsWith('label:')): string {
@@ -128,7 +141,7 @@ ${tile('Hashrate', rate(net.rate), `±${pct(plusMinus, 0)}`, `${rate(net.rateInt
 ${tile('Difficulty', bigNum(net.difficulty), `<span class="${net.difficultyChange >= 0 ? 'up' : 'down'}">${net.difficultyChange >= 0 ? '+' : '−'}${pct(Math.abs(net.difficultyChange))}</span>`)}
 ${tile('Average block time', clock(net.meanInterval), `target ${clock(target)}`)}
 ${tile('Active miners', int(rows.length), `last ${int(net.blocks)} blocks`)}
-${top === undefined ? '' : tile('Largest miner', pct(top.share), esc(top.labelled ? top.name : short(top.name)), `${pct(top.shareInterval.lo)} to ${pct(top.shareInterval.hi)}`)}
+${top === undefined ? '' : tile('Largest miner', pct(top.share), esc(minerTitle(top).text), `${pct(top.shareInterval.lo)} to ${pct(top.shareInterval.hi)}`)}
 </div>`;
 }
 
@@ -158,7 +171,7 @@ function minerRows(ctx: PageCtx, rows: MinerRow[], start = 0): string {
   return rows
     .map((r, i) => `<tr>
 <td class="rank">${start + i + 1}</td>
-<td>${minerLink(r.id, r.name, r.labelled)}${r.labelled ? `<span class="sub">${r.scripts} address${r.scripts === 1 ? '' : 'es'}</span>` : ''}</td>
+<td>${titleLink(r)}${r.labelled ? `<span class="sub">${r.scripts} address${r.scripts === 1 ? '' : 'es'}</span>` : r.tags.length > 0 || r.paysOut ? `<span class="sub mono">${esc(short(r.name))}</span>` : ''}</td>
 <td title="${pct(r.shareInterval.lo)} to ${pct(r.shareInterval.hi)}"><div class="share">${shareBar(r.share, r.shareInterval.lo, r.shareInterval.hi, max, r.claim?.share ?? null)}<span class="pctv">${pct(r.share)}</span></div></td>
 <td class="n">${int(r.blocks)}</td>
 <td class="n" title="${esc(range(r.rateInterval.lo, r.rateInterval.hi, rate))}">${rate(r.rate)}</td>
@@ -218,7 +231,7 @@ export function minersPage(ctx: PageCtx, window: WindowName): string {
   return layout(ctx, 'Miners: Pearl mining', '/miners', `
 <section class="card">
   <div class="head"><h2>Share of blocks</h2><span class="muted">last ${int(net.blocks)} blocks</span>${windowTabs(window, '/miners')}</div>
-  ${rankChart(chartRows.map((row) => ({ row, href: minerHref(row.id), label: row.labelled ? row.name : short(row.name), mono: !row.labelled })))}
+  ${rankChart(chartRows.map((row) => ({ row, href: minerHref(row.id), label: minerTitle(row).text, mono: minerTitle(row).mono })))}
   <div class="key"><span><i class="k-dot"></i>found</span><span><i class="k-claim"></i>pool says, matches</span><span><i class="k-claim off"></i>pool says, off</span></div>
 </section>
 <section class="card">

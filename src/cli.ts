@@ -33,6 +33,9 @@ async function main(): Promise<void> {
       log(`[pools] ${r.label}: ${r.error ?? `${r.scripts.size} script(s), ${r.matched} of ${r.published} ${r.kind} matched${r.claim ? `, claims ${(100 * (r.claim.hashrate! / r.claim.networkHashrate!)).toFixed(1)}%` : ''}`}`);
     }
     for (const c of run.conflicts) log(`[pools] not labelled, claimed by ${c.pools.join(' and ')}: ${c.script}`);
+    for (const c of run.clashes) log(`[pools] linked addresses span ${c.join(' and ')}; their unnamed ones stay unnamed`);
+    const linked = run.labels.filter((l) => l.source.startsWith('coinbases spent together'));
+    log(`[pools] ${linked.reduce((n, l) => n + l.scripts.length, 0)} more addresses named by spending`);
     writePools(dataDir, run);
     store.close();
     return;

@@ -54,13 +54,29 @@ export interface CoinbaseSpend {
 
 const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString('hex');
 
+// pearld's own template flag; it says which software built the block, not who mined it.
+export const DEFAULT_TAG = '/P2SH/pearld/';
+
+/**
+ * The miner's own text out of the printable runs of a coinbase script: its
+ * /tags/ other than pearld's default, or else a run that reads like words.
+ * Printable bytes of the height or extra nonce ("Yj/pearl-pool/", "m~T'") fall away.
+ */
+export function cleanTag(raw: string): string {
+  const tags = (raw.match(/\/[^\s/]+(?:\/[^\s/]+)*\//g) ?? []).filter((t) => t !== DEFAULT_TAG);
+  if (tags.length > 0) return [...new Set(tags)].join(' ');
+  if (raw.includes(DEFAULT_TAG)) return '';
+  const words = raw.match(/[A-Za-z][A-Za-z0-9 .,'-]{7,}/g);
+  return words === null ? '' : words.join(' ').trim();
+}
+
 // Runs of 4 or more printable ASCII bytes. The script starts with pushes of
-// the height and an extra nonce, which are binary and fall out here.
+// the height and an extra nonce, which are binary and mostly fall out here.
 export function coinbaseTag(script: Uint8Array): string | null {
   const runs = Buffer.from(script)
     .toString('latin1')
     .match(/[\x20-\x7e]{4,}/g);
-  return runs === null ? null : runs.join(' ').trim() || null;
+  return runs === null ? null : cleanTag(runs.join(' ')) || null;
 }
 
 export function blockFacts(block: PearlBlock, height: number, hash: string, network: PearlNetwork): BlockFacts {

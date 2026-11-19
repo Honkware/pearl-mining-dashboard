@@ -31,8 +31,13 @@ export interface PoolSource {
 
 const strip0x = (h: string): string => h.replace(/^0x/, '').toLowerCase();
 
+// open-ethereum-pool's /api/blocks: blocks waiting, immature and matured.
+const openEthereumPoolHashes = (b: Json): string[] =>
+  [...(b.candidates ?? []), ...(b.immature ?? []), ...(b.matured ?? [])].map((x: Json) => strip0x(x.hash));
+
 // Endpoints read from each site's own network requests on 2026-11-18.
-// No list found for F2Pool or minerlab (its API refused requests that day).
+// No list found for F2Pool or minerlab (its API refused requests that day), or for
+// suprnova, rplant, pooly.ca, veinpool and getablocks (no Pearl blocks in their feeds).
 export const POOLS: PoolSource[] = [
   {
     label: 'Kryptex',
@@ -100,6 +105,38 @@ export const POOLS: PoolSource[] = [
       blockHashes: s.pool.blocks.filter((x: Json) => typeof x === 'string' && x.includes(':')).map((x: string) => strip0x(x.split(':')[0]!)),
       claim: { hashrate: s.pool.hashrate, networkHashrate: s.network.networkHashps },
     }),
+  },
+  {
+    label: '2Miners',
+    site: 'https://prl.2miners.com',
+    urls: ['https://prl.2miners.com/api/blocks'],
+    parse: ([b]) => ({ blockHashes: openEthereumPoolHashes(b) }),
+  },
+  {
+    // Solo blocks pay the miner who found them, so these addresses are 2Miners' solo users, not 2Miners.
+    label: '2Miners Solo',
+    site: 'https://solo-prl.2miners.com',
+    urls: ['https://solo-prl.2miners.com/api/blocks'],
+    parse: ([b]) => ({ blockHashes: openEthereumPoolHashes(b) }),
+  },
+  {
+    label: 'AlphaPool',
+    site: 'https://pearl.alphapool.tech',
+    urls: ['https://pearl.alphapool.tech/api/blocks'],
+    parse: ([b]) => ({ blockHashes: b.map((x: Json) => strip0x(x.hash)) }),
+  },
+  {
+    label: 'HimPool',
+    site: 'https://himpool.com',
+    urls: ['https://himpool.com/api/pools/prl/blocks?page=0&pageSize=100'],
+    // The same feed carries blocks of a merge-mined chain; keep Pearl's own.
+    parse: ([b]) => ({ blockHashes: b.filter((x: Json) => x.type !== 'auxpow' && String(x.poolId).startsWith('prl')).map((x: Json) => strip0x(x.hash)) }),
+  },
+  {
+    label: 'Rabid Mining',
+    site: 'https://pool.rabidmining.com',
+    urls: ['https://pool.rabidmining.com/api/pools/pearl/blocks?page=0&pageSize=100'],
+    parse: ([b]) => ({ blockHashes: b.map((x: Json) => strip0x(x.hash)) }),
   },
   {
     label: 'Skypool',
@@ -173,12 +210,54 @@ export function matchEvidence(store: Store, network: PearlNetwork, e: Evidence):
   return { scripts, matched, published: hashes.length, kind: 'blocks' };
 }
 
+/**
+ * Coinbase outputs can only be spent by whoever holds their key, so two
+ * addresses whose coinbases are spent in one transaction have one owner.
+ * Groups addresses that way and gives each group the one name it already
+ * contains; a group holding two different names is left alone.
+ */
+export function linkBySpending(store: Store, labels: LabelEntry[], day: string): { added: LabelEntry[]; clashes: string[][] } {
+  const rows = store.db
+    .prepare('SELECT s.txid AS txid, p.script AS script FROM spends s JOIN payouts p ON p.txid = s.cb_txid AND p.vout = s.cb_vout')
+    .all() as { txid: string; script: string }[];
+  const parent = new Map<string, string>();
+  const find = (x: string): string => {
+    let r = x;
+    while (parent.has(r) && parent.get(r) !== r) r = parent.get(r)!;
+    parent.set(x, r);
+    return r;
+  };
+  const byTx = new Map<string, string>();
+  for (const { txid, script } of rows) {
+    if (!parent.has(script)) parent.set(script, script);
+    const first = byTx.get(txid);
+    if (first === undefined) byTx.set(txid, script);
+    else parent.set(find(script), find(first));
+  }
+  const nameOf = new Map<string, string>();
+  for (const l of labels) for (const s of l.scripts) nameOf.set(s, l.label);
+  const groups = new Map<string, string[]>();
+  for (const s of parent.keys()) groups.set(find(s), [...(groups.get(find(s)) ?? []), s]);
+  const added: LabelEntry[] = [];
+  const clashes: string[][] = [];
+  for (const members of groups.values()) {
+    const names = [...new Set(members.map((m) => nameOf.get(m)).filter((n): n is string => n !== undefined))];
+    if (names.length > 1) clashes.push(names.sort());
+    if (names.length !== 1) continue;
+    const unnamed = members.filter((m) => !nameOf.has(m));
+    if (unnamed.length > 0) added.push({ label: names[0]!, scripts: unnamed, source: `coinbases spent together with ${names[0]}'s, read ${day}` });
+  }
+  return { added, clashes };
+}
+
 export interface PoolsRun {
   results: PoolResult[];
   labels: LabelEntry[];
   claims: Claim[];
   /** Scripts two pools both pointed to; left unlabelled. */
   conflicts: { script: string; pools: string[] }[];
+  /** Groups of linked addresses that hold more than one name; none of their unnamed members is named. */
+  clashes: string[][];
 }
 
 const sameName = (a: string): string => a.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -258,8 +337,9 @@ export async function collectPools(opts: { store: Store; network: PearlNetwork; 
     }))
     .filter((l) => l.scripts.length > 0)
     .concat(trackerLabels);
+  const linked = linkBySpending(opts.store, labels, day);
   const claims = results.flatMap((r) => (r.claim === undefined ? [] : [r.claim]));
-  return { results, labels, claims, conflicts };
+  return { results, labels: [...labels, ...linked.added], claims, conflicts, clashes: linked.clashes };
 }
 
 /** Writes pool-labels.json and pool-claims.json; the hand-edited labels.json and claims.json are left alone. */

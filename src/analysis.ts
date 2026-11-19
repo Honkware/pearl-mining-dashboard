@@ -6,6 +6,7 @@
 import type { PearlNetwork } from 'pearljs';
 import type { Store } from './db.js';
 import { claimedShare, identityName, identityOf, type Claim, type Labels } from './labels.js';
+import { cleanTag, DEFAULT_TAG } from './facts.js';
 import { binomialAtLeast, binomialAtMost, countInterval, shareInterval, type Interval } from './stats.js';
 
 export const WINDOWS = { day: 445, week: 3118, month: 13_361, all: Infinity } as const;
@@ -72,6 +73,8 @@ export interface MinerRow {
   lastHeight: number;
   tags: string[];
   claim: ClaimTest | null;
+  /** Unnamed, but pays its coinbases out to many addresses at once, as a pool does. */
+  paysOut: boolean;
 }
 
 export interface ClaimTest {
@@ -154,6 +157,10 @@ export function miners(ctx: Context, window: WindowName): MinerRow[] {
   const span = Math.max(1, blocks[blocks.length - 1]!.time - before.time);
   const meanWork = blocks.reduce((s, b) => s + b.work, 0) / n;
   const tip = blocks[blocks.length - 1]!.time;
+  // Payout scripts whose coinbases were spent into ten or more outputs.
+  const payers = new Set(
+    (ctx.store.db.prepare('SELECT DISTINCT p.script AS script FROM spends s JOIN payouts p ON p.txid = s.cb_txid AND p.vout = s.cb_vout WHERE s.outputs >= 10').all() as { script: string }[]).map((r) => r.script),
+  );
   const groups = new Map<string, { blocks: BlockRow[]; scripts: Set<string> }>();
   for (const b of blocks) {
     const id = identityOf(b.payout_script, ctx.labels);
@@ -188,7 +195,8 @@ export function miners(ctx: Context, window: WindowName): MinerRow[] {
       empty: g.blocks.filter((b) => b.tx_count === 1).length,
       lastTime: last.time,
       lastHeight: last.height,
-      tags: [...new Set(g.blocks.map((b) => b.tag).filter((t): t is string => t !== null))],
+      tags: [...new Set(g.blocks.map((b) => (b.tag === null ? null : cleanTag(b.tag))).filter((t): t is string => t !== null && t !== '' && t !== DEFAULT_TAG))],
+      paysOut: !labelled && [...g.scripts].some((s) => payers.has(s)),
       claim: test,
     });
   }

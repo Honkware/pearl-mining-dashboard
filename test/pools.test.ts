@@ -58,3 +58,36 @@ test('pools are named by their own data first, then by trackers, and a contested
   expect(run.claims).toEqual([{ label: 'Pool A', hashrate: 40, networkHashrate: 100, readAt: chain.time, source: 'https://a.test' }]);
   store.close();
 });
+
+test('an address whose coinbase is spent with a named one takes its name, unless the group holds two names', async () => {
+  const { testAccount } = await import('pearljs/testing');
+  const { payFromAccount } = await import('pearljs');
+  const { linkBySpending } = await import('../src/pools.js');
+  const chain = new SimulatedChain({ network: net, premine: 3 });
+  const account = testAccount(0, net);
+  const addr = [0, 1, 2, 3].map((i) => account.deriveAddress(i));
+  const coin = addr.map((a) => chain.mine(1, { coinbaseTo: a })[0]!.hash);
+  chain.mine(3);
+  const spend = (idx: number[]): void => {
+    const utxos = idx.map((i) => {
+      const tx = chain.block(coin[i]!)!.txs[0]!;
+      return { txid: tx.getId(), vout: 0, index: i, value: tx.outs[0]!.value, script: toOutputScript(addr[i]!, net), address: addr[i]!, confirmations: 4, coinbase: true };
+    });
+    chain.accept(payFromAccount(account, { network: net, utxos, recipients: [{ address: testAddress(5, net), amount: 'max' }], feeRate: 2000n, coinbaseMaturity: net.coinbaseMaturity }).transaction);
+    chain.mine(1);
+  };
+  spend([0, 1]);
+  spend([2, 3]);
+  const dir = mkdtempSync(join(tmpdir(), 'pmd-link-'));
+  dirs.push(dir);
+  const store = new Store(join(dir, 'x.sqlite'));
+  await startIndexer({ store, rpc: chain.rpc, network: net, stopAtTip: true }).done;
+
+  const one = linkBySpending(store, [{ label: 'Pool A', scripts: [hex(addr[0]!)], source: 'test' }], 'd');
+  expect(one.added).toEqual([{ label: 'Pool A', scripts: [hex(addr[1]!)], source: "coinbases spent together with Pool A's, read d" }]);
+
+  const two = linkBySpending(store, [{ label: 'Pool A', scripts: [hex(addr[2]!)], source: 't' }, { label: 'Pool B', scripts: [hex(addr[3]!)], source: 't' }], 'd');
+  expect(two.added).toEqual([]);
+  expect(two.clashes).toEqual([['Pool A', 'Pool B']]);
+  store.close();
+});
