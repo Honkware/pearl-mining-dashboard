@@ -52,6 +52,9 @@ function ago(seconds: number): string {
 
 const utc = (t: number): string => new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' ');
 export const minerHref = (id: string): string => `/miner/${encodeURIComponent(id)}`;
+// Where "Made with pearljs" links to, once pearljs has a public home.
+const PEARLJS_URL = process.env.PEARLJS_URL ?? '';
+
 // Changes on every start, so browsers never reuse a stylesheet from an older build.
 const STYLE_VERSION = Date.now().toString(36);
 const WINDOW_SHORT: Record<WindowName, string> = { day: '1D', week: '1W', month: '1M', all: 'All' };
@@ -117,7 +120,13 @@ function layout(ctx: PageCtx, title: string, current: string, body: string): str
 ${notice}
 ${body}
 </main>
+<footer class="wrap">Made with ${PEARLJS_URL ? `<a href="${esc(PEARLJS_URL)}">pearljs</a>` : 'pearljs'}</footer>
 <script>
+// Chart hover: moves the chart's cursor to the nearest point and shows its values.
+const tip=document.createElement('div');tip.className='tip';tip.hidden=true;document.body.append(tip);const pts=new WeakMap();
+const hide=()=>{tip.hidden=true;document.querySelectorAll('svg[data-hover] .cursor,svg[data-hover] .cursor-dot').forEach(e=>e.setAttribute('visibility','hidden'))};
+document.addEventListener('pointermove',e=>{const svg=e.target.closest&&e.target.closest('svg[data-hover]');if(!svg){hide();return}let p=pts.get(svg);if(!p){p=JSON.parse(svg.dataset.hover);pts.set(svg,p)}const m=svg.getScreenCTM();if(!m)return;const at=new DOMPoint(e.clientX,e.clientY).matrixTransform(m.inverse());let best=p[0];for(const q of p)if(Math.abs(q[0]-at.x)<Math.abs(best[0]-at.x))best=q;const c=svg.querySelector('.cursor'),d=svg.querySelector('.cursor-dot');c.setAttribute('x1',best[0]);c.setAttribute('x2',best[0]);c.setAttribute('visibility','visible');d.setAttribute('cx',best[0]);d.setAttribute('cy',best[1]);d.setAttribute('visibility','visible');tip.replaceChildren(...best[2].map((t,i)=>{const s=document.createElement(i?'span':'b');s.textContent=t;return s}));tip.hidden=false;const r=tip.getBoundingClientRect();const left=e.clientX+14+r.width>innerWidth?e.clientX-14-r.width:e.clientX+14;tip.style.left=left+'px';tip.style.top=Math.max(8,e.clientY-r.height-10)+'px'});
+document.addEventListener('pointerleave',hide);
 // Checks for a new block every 15 s and swaps in the fresh page body, keeping the scroll position.
 setInterval(async()=>{try{const t=await (await fetch('/api/tip.json',{cache:'no-store'})).json();if(!t.hash||t.hash===document.body.dataset.tip)return;const html=await (await fetch(location.href,{cache:'no-store'})).text();const doc=new DOMParser().parseFromString(html,'text/html');for(const sel of ['header.bar .status','main']){const a=document.querySelector(sel),b=doc.querySelector(sel);if(a&&b)a.replaceWith(b)}document.body.dataset.tip=t.hash}catch{}},15000);
 document.getElementById('theme').addEventListener('click',()=>{const r=document.documentElement;const dark=r.dataset.theme?r.dataset.theme==='dark':matchMedia('(prefers-color-scheme: dark)').matches;r.dataset.theme=dark?'light':'dark';try{localStorage.setItem('theme',r.dataset.theme)}catch{}});
@@ -170,17 +179,17 @@ function claimCell(r: MinerRow): string {
 }
 
 /** The miners table; the claims column only appears when some row in it has a claim. */
-function minerTable(ctx: PageCtx, rows: MinerRow[]): string {
+function minerTable(ctx: PageCtx, rows: MinerRow[], ranks?: number[]): string {
   const claims = rows.some((r) => r.claim !== null);
   const head = `<thead><tr><th></th><th>Miner</th><th>Share of blocks</th><th class="n">Blocks</th><th class="n">Hashrate</th>${claims ? '<th>Pool claims</th>' : ''}<th class="n">Last block</th></tr></thead>`;
-  return `<div class="scroll"><table>${head}<tbody>${minerRows(ctx, rows, claims)}</tbody></table></div>`;
+  return `<div class="scroll"><table>${head}<tbody>${minerRows(ctx, rows, claims, ranks)}</tbody></table></div>`;
 }
 
-function minerRows(ctx: PageCtx, rows: MinerRow[], claims: boolean): string {
+function minerRows(ctx: PageCtx, rows: MinerRow[], claims: boolean, ranks?: number[]): string {
   const max = Math.max(0.05, ...rows.map((r) => Math.max(r.shareInterval.hi, r.claim?.share ?? 0)));
   return rows
     .map((r, i) => `<tr>
-<td class="rank">${i + 1}</td>
+<td class="rank">${ranks?.[i] ?? i + 1}</td>
 <td>${titleLink(r)}${r.labelled ? `<span class="sub">${r.scripts} address${r.scripts === 1 ? '' : 'es'}</span>` : r.tags.length > 0 || r.paysOut ? `<span class="sub mono">${esc(short(r.name))}</span>` : ''}</td>
 <td title="${pct(r.shareInterval.lo)} to ${pct(r.shareInterval.hi)}"><div class="share">${shareBar(r.share, r.shareInterval.lo, r.shareInterval.hi, max, r.claim?.share ?? null)}<span class="pctv">${pct(r.share)}</span></div></td>
 <td class="n">${int(r.blocks)}</td>
@@ -215,14 +224,15 @@ export function overview(ctx: PageCtx, window: WindowName): string {
   const pts = series(ctx, window, per);
   const ivs = intervals(ctx, window).filter((s) => s >= 0);
   return layout(ctx, 'Pearl mining', '/', `
+<div class="pagebar"><span class="muted">Last ${int(net.blocks)} blocks</span>${windowTabs(window, '/')}</div>
 ${stats(net, rows, ctx.network.targetSpacing)}
 <section class="card">
-  <div class="head"><h2>Miners</h2><span class="muted">${int(rows.length)} in the last ${int(net.blocks)} blocks</span>${windowTabs(window, '/')}</div>
+  <div class="head"><h2>Miners</h2><span class="muted">${int(rows.length)}</span></div>
   ${minerTable(ctx, rows.slice(0, 10))}
   <div class="foot"><a class="more" href="/miners?window=${window}">All ${int(rows.length)} miners</a></div>
 </section>
 <div class="grid even">
-  <section class="card"><div class="head"><h2>Hashrate</h2></div>${lineChart(pts, (p) => p.rate, { label: 'Hashrate', unit: rate, band: (p) => [p.rateLo, p.rateHi] })}</section>
+  <section class="card"><div class="head"><h2>Hashrate</h2></div>${lineChart(pts, (p) => p.rate, { label: 'Hashrate', unit: rate, band: (p) => [p.rateLo, p.rateHi], extra: (p) => `difficulty ${bigNum(p.difficulty)}` })}</section>
   <section class="card"><div class="head"><h2>Block times</h2></div>${intervalHistogram(ivs, ctx.network.targetSpacing)}</section>
 </div>
 <section class="card">
@@ -231,19 +241,32 @@ ${stats(net, rows, ctx.network.targetSpacing)}
 </section>`);
 }
 
-export function minersPage(ctx: PageCtx, window: WindowName): string {
+const PAGE = 50;
+
+export function minersPage(ctx: PageCtx, window: WindowName, query = '', page = 1): string {
   const net = network(ctx, window);
   if (net === null) return layout(ctx, 'Miners: Pearl mining', '/miners', '<div class="card empty">No blocks indexed yet.</div>');
   const rows = miners(ctx, window);
   const chartRows = rows.filter((r, i) => i < 3 || r.share >= 0.01).slice(0, 12);
+  const q = query.trim().toLowerCase();
+  const ranked = rows.map((row, i) => ({ row, rank: i + 1 }));
+  const found = q === '' ? ranked : ranked.filter(({ row }) => row.name.toLowerCase().includes(q) || minerTitle(row).text.toLowerCase().includes(q) || row.tags.some((t) => t.toLowerCase().includes(q)));
+  const pages = Math.max(1, Math.ceil(found.length / PAGE));
+  const at = Math.min(Math.max(1, page), pages);
+  const shown = found.slice((at - 1) * PAGE, at * PAGE);
+  const link = (p: number): string => `/miners?window=${window}${q ? `&q=${encodeURIComponent(query.trim())}` : ''}${p > 1 ? `&page=${p}` : ''}`;
+  const pager = pages <= 1 ? '' : `<div class="foot pager">${at > 1 ? `<a class="more" href="${link(at - 1)}">Previous</a>` : '<span></span>'}<span class="muted">Page ${at} of ${pages}</span>${at < pages ? `<a class="more" href="${link(at + 1)}">Next</a>` : '<span></span>'}</div>`;
   return layout(ctx, 'Miners: Pearl mining', '/miners', `
+<div class="pagebar"><span class="muted">Last ${int(net.blocks)} blocks</span>${windowTabs(window, '/miners')}</div>
 <section class="card">
-  <div class="head"><h2>Share of blocks</h2><span class="muted">last ${int(net.blocks)} blocks</span>${windowTabs(window, '/miners')}</div>
+  <div class="head"><h2>Share of blocks</h2></div>
   ${rankChart(chartRows.map((row) => ({ row, href: minerHref(row.id), label: minerTitle(row).text, mono: minerTitle(row).mono })))}
 </section>
 <section class="card">
-  <div class="head"><h2>All miners</h2><span class="muted">${int(rows.length)}</span></div>
-  ${minerTable(ctx, rows.slice(0, 500))}
+  <div class="head"><h2>Miners</h2><span class="muted">${q ? `${int(found.length)} of ${int(rows.length)}` : int(rows.length)}</span>
+    <form class="search" action="/miners" method="get"><input type="hidden" name="window" value="${window}"><input type="search" name="q" value="${esc(query.trim())}" placeholder="Pool or address" aria-label="Search miners"></form></div>
+  ${shown.length === 0 ? '<p class="muted">No miner matches.</p>' : minerTable(ctx, shown.map((s) => s.row), shown.map((s) => s.rank))}
+  ${pager}
 </section>`);
 }
 

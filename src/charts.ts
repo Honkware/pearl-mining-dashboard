@@ -68,8 +68,18 @@ export function rankChart(items: RankRow[], width = 760): string {
   return `<svg class="chart rank" viewBox="0 0 ${width} ${height}" role="img" aria-label="Share of blocks by identity">${parts.join('')}</svg>`;
 }
 
+/** Hover targets for a chart: x and y in viewBox units, and the lines to show. */
+type Hover = { x: number; y: number; text: string[] }[];
+const hoverAttr = (h: Hover): string => ` data-hover="${esc(JSON.stringify(h.map((p) => [Math.round(p.x * 10) / 10, Math.round(p.y * 10) / 10, p.text])))}"`;
+// The cursor line and dot the page script moves; hidden until the pointer is over the chart.
+const cursor = (top: number, bottom: number): string =>
+  `<line class="cursor" x1="0" x2="0" y1="${top}" y2="${bottom}" visibility="hidden"/><circle class="cursor-dot" r="3.5" cx="0" cy="0" visibility="hidden"/>`;
+
+const when = (t: number): string =>
+  new Date(t * 1000).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
+
 /** A small line chart; with `band`, the interval is drawn under the line. */
-export function lineChart(points: SeriesPoint[], pick: (p: SeriesPoint) => number, opts: { label: string; unit: (v: number) => string; band?: (p: SeriesPoint) => [number, number]; width?: number }): string {
+export function lineChart(points: SeriesPoint[], pick: (p: SeriesPoint) => number, opts: { label: string; unit: (v: number) => string; band?: (p: SeriesPoint) => [number, number]; width?: number; extra?: (p: SeriesPoint) => string }): string {
   const width = opts.width ?? 560;
   const height = 150;
   const pad = { l: 64, r: 10, t: 8, b: 22 };
@@ -105,7 +115,13 @@ export function lineChart(points: SeriesPoint[], pick: (p: SeriesPoint) => numbe
   const day = (t: number): string => new Date(t * 1000).toISOString().slice(5, 10);
   parts.push(`<text class="tick" x="${pad.l}" y="${height - 4}">${day(t0)}</text>`);
   parts.push(`<text class="tick" x="${width - pad.r}" y="${height - 4}" text-anchor="end">${day(t1)}</text>`);
-  return `<svg class="chart line-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(opts.label)}">${parts.join('')}</svg>`;
+  parts.push(cursor(pad.t, height - pad.b));
+  const hover = points.map((p) => ({
+    x: x(p.time),
+    y: y(pick(p)),
+    text: [when(p.time), opts.unit(pick(p)) + (opts.band ? ` (${opts.unit(opts.band(p)[0])} to ${opts.unit(opts.band(p)[1])})` : ''), ...(opts.extra ? [opts.extra(p)] : [])],
+  }));
+  return `<svg class="chart line-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(opts.label)}"${hoverAttr(hover)}>${parts.join('')}</svg>`;
 }
 
 /**
@@ -126,16 +142,19 @@ export function intervalHistogram(intervals: number[], target: number, width = 5
   const bw = (width - pad.l - pad.r) / bins;
   const y = (v: number): number => pad.t + (1 - v / top) * (height - pad.t - pad.b);
   const parts: string[] = [];
+  const hover: Hover = [];
   counts.forEach((c, i) => {
-    const title = `${f(i * binW)} to ${i === bins - 1 ? 'more' : f((i + 1) * binW)} s: ${c} blocks, ${f(expected[i]!)} expected`;
-    parts.push(`<rect class="bar" x="${f(pad.l + i * bw + 1)}" y="${f(y(c))}" width="${f(bw - 2)}" height="${f(y(0) - y(c))}"><title>${esc(title)}</title></rect>`);
+    parts.push(`<rect class="bar" x="${f(pad.l + i * bw + 1)}" y="${f(y(c))}" width="${f(bw - 2)}" height="${f(y(0) - y(c))}"/>`);
+    const range = i === bins - 1 ? `${Math.round(i * binW)} s or more` : `${Math.round(i * binW)} to ${Math.round((i + 1) * binW)} s`;
+    hover.push({ x: pad.l + (i + 0.5) * bw, y: y(c), text: [range, `${c.toLocaleString('en-US')} blocks`, `${Math.round(expected[i]!).toLocaleString('en-US')} expected`] });
   });
   const curve = expected.map((e, i) => `${i === 0 ? 'M' : 'L'}${f(pad.l + (i + 0.5) * bw)} ${f(y(e))}`).join('');
   parts.push(`<path class="expect" d="${curve}"/>`);
   parts.push(`<line class="axis" x1="${pad.l}" x2="${width - pad.r}" y1="${f(y(0))}" y2="${f(y(0))}"/>`);
   for (const k of [0, 4, 8, 12, 16]) parts.push(`<text class="tick" x="${f(pad.l + k * bw)}" y="${height - 4}" text-anchor="middle">${Math.round(k * binW)}</text>`);
   parts.push(`<text class="tick" x="${width - pad.r}" y="${height - 4}" text-anchor="end">${Math.round(bins * binW)}+</text>`);
-  return `<svg class="chart hist" viewBox="0 0 ${width} ${height}" role="img" aria-label="Block interval histogram">${parts.join('')}</svg>`;
+  parts.push(cursor(pad.t, height - pad.b));
+  return `<svg class="chart hist" viewBox="0 0 ${width} ${height}" role="img" aria-label="Block interval histogram"${hoverAttr(hover)}>${parts.join('')}</svg>`;
 }
 
 /** Blocks per bucket as a short line, for a table row. */

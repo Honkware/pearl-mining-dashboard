@@ -65,3 +65,10 @@ test('the tip endpoint names the newest block, which the page carries for its re
   expect(html).toContain(`data-tip="${tip.hash}"`);
   expect(tip.height).toBe(63); // 3 premined, then 60
 });
+
+test('the miners page finds a pool by name and keeps its overall rank', async () => {
+  const html = await (await fetch(`${base}/miners?window=all&q=big`)).text();
+  expect(html).toContain('Big pool');
+  expect(html).toContain('1 of 3'); // the two test miners and the chain's own premine address
+  expect(html).not.toContain(testAddress(20, net).slice(0, 10));
+});

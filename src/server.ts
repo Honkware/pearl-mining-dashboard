@@ -142,7 +142,7 @@ export function createApp(opts: ServeOptions): Server {
         const below = url.searchParams.get('below');
         return page(() => blocksPage(ctx, below === null ? null : Number(below)));
       }
-      if (url.pathname === '/miners') return page(() => minersPage(ctx, window));
+      if (url.pathname === '/miners') return page(() => minersPage(ctx, window, url.searchParams.get('q') ?? '', Number(url.searchParams.get('page') ?? 1) || 1));
       if (url.pathname.startsWith('/miner/')) return page(() => minerPage(ctx, decodeURIComponent(url.pathname.slice(7)), window));
       if (url.pathname === '/api/network.json') return send(200, 'application/json', json(network(ctx, window)));
       if (url.pathname === '/api/miners.json') return send(200, 'application/json', json({ window, blocks: network(ctx, window)?.blocks ?? 0, miners: miners(ctx, window) }));
