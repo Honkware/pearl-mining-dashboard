@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import type { PearlNetwork } from 'pearljs';
 import { WINDOWS, miners, network, recentBlocks, stale, type WindowName } from './analysis.js';
 import type { Store } from './db.js';
-import { loadClaims, loadLabels, type Claim, type Labels } from './labels.js';
+import { loadClaims, loadLabels, mergeLabels, type Claim, type Labels } from './labels.js';
 import { blocksPage, minerPage, minersPage, overview, type PageCtx } from './views.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -57,8 +57,13 @@ function watched<T>(path: string, load: () => T): () => T {
 const json = (v: unknown): string => JSON.stringify(v, (_k, x: unknown) => (typeof x === 'bigint' ? x.toString() : x), 1);
 
 export function createApp(opts: ServeOptions): Server {
-  const labels = watched<Labels>(join(opts.dataDir, 'labels.json'), () => loadLabels(join(opts.dataDir, 'labels.json'), opts.network));
-  const claims = watched<Claim[]>(join(opts.dataDir, 'claims.json'), () => loadClaims(join(opts.dataDir, 'claims.json')));
+  const file = (name: string): string => join(opts.dataDir, name);
+  const handLabels = watched<Labels>(file('labels.json'), () => loadLabels(file('labels.json'), opts.network));
+  const poolLabels = watched<Labels>(file('pool-labels.json'), () => loadLabels(file('pool-labels.json'), opts.network));
+  const handClaims = watched<Claim[]>(file('claims.json'), () => loadClaims(file('claims.json')));
+  const poolClaims = watched<Claim[]>(file('pool-claims.json'), () => loadClaims(file('pool-claims.json')));
+  const labels = (): Labels => mergeLabels(handLabels(), poolLabels());
+  const claims = (): Claim[] => [...handClaims(), ...poolClaims()];
   const now = opts.now ?? (() => Math.floor(Date.now() / 1000));
   const cache = new Map<string, string>();
   let cacheTip = '';
@@ -94,7 +99,7 @@ export function createApp(opts: ServeOptions): Server {
       };
       const page = (make: () => string | null): void => {
         // Labels and claims can change without a new block; their state is part of the key.
-        const k = `${key}|${ctx.labels.entries.length}|${ctx.claims.length}`;
+        const k = `${key}|${ctx.labels.byScript.size}|${ctx.labels.entries.length}|${ctx.claims.map((c) => c.readAt).join(',')}`;
         let html = cache.get(k) ?? null;
         if (html === null) {
           html = make();

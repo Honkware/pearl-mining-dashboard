@@ -23,6 +23,20 @@ async function main(): Promise<void> {
     await serve({ store, network: demoNetwork, dataDir: dir, port: Number(process.env.PORT ?? 8080), host: '127.0.0.1', now: () => chain.time + 60, log });
     return;
   }
+  if (cmd === 'pools') {
+    const { networks } = await import('pearljs');
+    const { collectPools, writePools } = await import('./pools.js');
+    const network = networks[(process.env.PEARL_NETWORK ?? 'mainnet') as keyof typeof networks];
+    const store = new Store(join(dataDir, `${network.name}.sqlite`));
+    const run = await collectPools({ store, network, dataDir, now: Math.floor(Date.now() / 1000) });
+    for (const r of run.results) {
+      log(`[pools] ${r.label}: ${r.error ?? `${r.scripts.size} script(s), ${r.matched} of ${r.published} ${r.kind} matched${r.claim ? `, claims ${(100 * (r.claim.hashrate! / r.claim.networkHashrate!)).toFixed(1)}%` : ''}`}`);
+    }
+    for (const c of run.conflicts) log(`[pools] not labelled, claimed by ${c.pools.join(' and ')}: ${c.script}`);
+    writePools(dataDir, run);
+    store.close();
+    return;
+  }
   const { client, network } = nodeFromEnv();
   const store = new Store(join(dataDir, `${network.name}.sqlite`));
 
@@ -48,7 +62,7 @@ async function main(): Promise<void> {
     await serve({ store, network, dataDir, port: Number(process.env.PORT ?? 8080), host: process.env.HOST ?? '127.0.0.1', nodeHeight: () => client.getBlockCount(), log });
     return;
   }
-  console.error('usage: cli.js index | serve | demo');
+  console.error('usage: cli.js index | serve | pools | demo');
   process.exitCode = 2;
 }
 

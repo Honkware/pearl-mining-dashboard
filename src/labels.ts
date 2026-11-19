@@ -62,6 +62,21 @@ export function loadLabels(path: string, network: PearlNetwork): Labels {
   }
 }
 
+/** Hand-written labels first; a script they already name is dropped from the later files. */
+export function mergeLabels(first: Labels, ...rest: Labels[]): Labels {
+  const out: Labels = { byScript: new Map(first.byScript), entries: [...first.entries] };
+  for (const l of rest) {
+    for (const entry of l.entries) {
+      const own = [...l.byScript].filter(([s, e]) => e === entry && !out.byScript.has(s));
+      if (own.length === 0) continue;
+      const kept = { ...entry, scripts: own.map(([s]) => s) };
+      out.entries.push(kept);
+      for (const [s] of own) out.byScript.set(s, kept);
+    }
+  }
+  return out;
+}
+
 export function parseClaims(raw: string): Claim[] {
   const doc = JSON.parse(raw) as { claims?: Claim[] };
   const claims = doc.claims ?? [];
