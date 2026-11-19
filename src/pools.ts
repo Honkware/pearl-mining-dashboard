@@ -8,6 +8,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { toOutputScript, type PearlNetwork } from 'pearljs';
 import type { Store } from './db.js';
+import { cleanTag } from './facts.js';
 import type { Claim, LabelEntry } from './labels.js';
 
 // Pool APIs are untyped; each parser reads the few fields it needs.
@@ -22,6 +23,8 @@ export interface Evidence {
 
 export interface PoolSource {
   label: string;
+  /** The URLs answer with HTML rather than JSON; the parser then gets text. */
+  html?: boolean;
   /** The page a person can check. */
   site: string;
   /** API URLs fetched, in order; the parser gets their bodies in the same order. */
@@ -30,6 +33,13 @@ export interface PoolSource {
 }
 
 const strip0x = (h: string): string => h.replace(/^0x/, '').toLowerCase();
+
+// Miningcore's /api/pools/<id>: the pool's hashrate and the network's; nothing when the pool reports none.
+const miningcoreClaim = (p: Json): Pick<Evidence, 'claim'> => {
+  const hashrate = p.pool?.poolStats?.poolHashrate ?? 0;
+  const networkHashrate = p.pool?.networkStats?.networkHashrate ?? 0;
+  return hashrate > 0 && networkHashrate > 0 ? { claim: { hashrate, networkHashrate } } : {};
+};
 
 // open-ethereum-pool's /api/blocks: blocks waiting, immature and matured.
 const openEthereumPoolHashes = (b: Json): string[] =>
@@ -131,15 +141,30 @@ export const POOLS: PoolSource[] = [
   {
     label: 'HimPool',
     site: 'https://himpool.com',
-    urls: ['https://himpool.com/api/pools/prl/blocks?page=0&pageSize=100'],
+    urls: ['https://himpool.com/api/pools/prl/blocks?page=0&pageSize=100', 'https://himpool.com/api/pools/prl'],
     // The same feed carries blocks of a merge-mined chain; keep Pearl's own.
-    parse: ([b]) => ({ blockHashes: b.filter((x: Json) => x.type !== 'auxpow' && String(x.poolId).startsWith('prl')).map((x: Json) => strip0x(x.hash)) }),
+    parse: ([b, p]) => ({ blockHashes: b.filter((x: Json) => x.type !== 'auxpow' && String(x.poolId).startsWith('prl')).map((x: Json) => strip0x(x.hash)), ...miningcoreClaim(p) }),
   },
   {
     label: 'Rabid Mining',
     site: 'https://pool.rabidmining.com',
-    urls: ['https://pool.rabidmining.com/api/pools/pearl/blocks?page=0&pageSize=100'],
-    parse: ([b]) => ({ blockHashes: b.map((x: Json) => strip0x(x.hash)) }),
+    urls: ['https://pool.rabidmining.com/api/pools/pearl/blocks?page=0&pageSize=100', 'https://pool.rabidmining.com/api/pools/pearl'],
+    parse: ([b, p]) => ({ blockHashes: b.map((x: Json) => strip0x(x.hash)), ...miningcoreClaim(p) }),
+  },
+  {
+    // F2Pool lists no blocks or wallet; its homepage table gives its Pearl hashrate and the network's.
+    // Its blocks are named by the /F2Pool/ tag it writes in its coinbases.
+    label: 'F2Pool',
+    site: 'https://www.f2pool.com',
+    urls: ['https://www.f2pool.com/'],
+    html: true,
+    parse: ([page]) => {
+      const text = String(page).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+      const row = text.match(/PRL\b[^$]*\$[^/]*\/\w+\s+([\d.,]+)\s*([KMGTPE])H\/s\s+([\d.,]+)\s*([KMGTPE])H\/s/);
+      if (row === null) return {};
+      const scale = (n: string, u: string): number => Number(n.replace(/,/g, '')) * 10 ** (3 * ('KMGTPE'.indexOf(u) + 1));
+      return { claim: { hashrate: scale(row[1]!, row[2]!), networkHashrate: scale(row[3]!, row[4]!) } };
+    },
   },
   {
     label: 'Skypool',
@@ -221,6 +246,32 @@ export function matchEvidence(store: Store, network: PearlNetwork, e: Evidence):
 }
 
 /**
+ * Names still-unnamed addresses by the coinbase tag they keep writing, when the
+ * tag names a known pool (as F2Pool's "/F2Pool/"). Tags are self-declared, so
+ * this comes after everything else, and only over the last month of blocks.
+ */
+export function tagLabels(store: Store, pools: string[], taken: Set<string>, day: string): LabelEntry[] {
+  const rows = store.db
+    .prepare('SELECT payout_script AS script, tag FROM blocks WHERE tag IS NOT NULL AND height > (SELECT MAX(height) FROM blocks) - 13361')
+    .all() as { script: string; tag: string }[];
+  const seen = new Map<string, Map<string, number>>();
+  for (const r of rows) {
+    if (taken.has(r.script)) continue;
+    const m = seen.get(r.script) ?? new Map<string, number>();
+    for (const t of cleanTag(r.tag).split(' ')) if (t !== '') m.set(sameName(t), (m.get(sameName(t)) ?? 0) + 1);
+    seen.set(r.script, m);
+  }
+  const byPool = new Map<string, string[]>();
+  for (const [script, tags] of seen) {
+    for (const pool of new Set(pools)) {
+      const key = sameName(pool);
+      if (key.length >= 2 && (tags.get(key) ?? 0) >= 2) byPool.set(pool, [...(byPool.get(pool) ?? []), script]);
+    }
+  }
+  return [...byPool].map(([label, scripts]) => ({ label, scripts, source: `coinbase tag, read ${day}` }));
+}
+
+/**
  * Coinbase outputs can only be spent by whoever holds their key, so two
  * addresses whose coinbases are spent in one transaction have one owner.
  * Groups addresses that way and gives each group the one name it already
@@ -286,7 +337,7 @@ export async function collectPools(opts: { store: Store; network: PearlNetwork; 
       for (const url of pool.urls) {
         const res = await get(url, { headers: { 'user-agent': 'pearl-mining-dashboard' } });
         if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
-        bodies.push(await res.json());
+        bodies.push(pool.html === true ? await res.text() : await res.json());
       }
       writeFileSync(join(dir, `${pool.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.json`), JSON.stringify({ label: pool.label, urls: pool.urls, read: opts.now, bodies }));
       const e = pool.parse(bodies);
@@ -356,6 +407,7 @@ export async function collectPools(opts: { store: Store; network: PearlNetwork; 
     }))
     .filter((l) => l.scripts.length > 0)
     .concat(trackerLabels);
+  labels.push(...tagLabels(opts.store, [...(opts.pools ?? POOLS).map((p) => p.label), ...trackerLabels.map((l) => l.label)], new Set(labels.flatMap((l) => l.scripts)), day));
   const linked = linkBySpending(opts.store, labels, day);
   const claims = [...results.flatMap((r) => (r.claim === undefined ? [] : [r.claim])), ...trackerClaims];
   return { results, labels: [...labels, ...linked.added], claims, conflicts, clashes: linked.clashes };

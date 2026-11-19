@@ -91,3 +91,13 @@ test('an address whose coinbase is spent with a named one takes its name, unless
   expect(two.clashes).toEqual([['Pool A', 'Pool B']]);
   store.close();
 });
+
+test("F2Pool's hashrate and the network's are read from its homepage row", async () => {
+  const { POOLS } = await import('../src/pools.js');
+  const f2 = POOLS.find((p) => p.label === 'F2Pool')!;
+  // Trimmed from https://www.f2pool.com/ as served on 2026-11-19.
+  const row = '<tr><td><span>PRL</span><span>Pearl"></span> PRL + NOCK</td><td>$ 0.0173 /T</td><td>3956.91 PH/s</td><td>103.69 EH/s</td></tr>';
+  const claim = f2.parse([row]).claim!;
+  expect(claim.hashrate).toBeCloseTo(3956.91e15, -10);
+  expect(claim.networkHashrate).toBeCloseTo(103.69e18, -13);
+});
