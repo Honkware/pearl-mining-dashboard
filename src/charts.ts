@@ -51,8 +51,8 @@ export function rankChart(items: RankRow[], width = 760): string {
     const r = item.row;
     const claim = r.claim;
     const outside = claim !== null && (claim.share < r.shareInterval.lo || claim.share > r.shareInterval.hi);
-    const title = `${item.label}: ${r.blocks} blocks, ${pct(r.share)} (95% interval ${pct(r.shareInterval.lo)} to ${pct(r.shareInterval.hi)})` +
-      (claim === null ? '' : `; claimed ${pct(claim.share)} by ${claim.claim.source}`);
+    const title = `${item.label}: ${r.blocks} blocks, ${pct(r.share)} (${pct(r.shareInterval.lo)} to ${pct(r.shareInterval.hi)})` +
+      (claim === null ? '' : `, pool says ${pct(claim.share)}`);
     parts.push(`<g class="rank-row"><title>${esc(title)}</title>`);
     if (i % 2 === 0) parts.push(`<rect class="stripe" x="0" y="${y - rowH / 2}" width="${width}" height="${rowH}"/>`);
     parts.push(`<a href="${esc(item.href)}"><text class="name${item.mono ? ' mono' : ''}" x="${left - 14}" y="${y + 4}" text-anchor="end">${esc(item.label)}</text></a>`);

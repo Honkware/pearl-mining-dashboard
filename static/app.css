@@ -83,7 +83,7 @@ header nav a[aria-current] { color: var(--ink); background: var(--raise); }
 .live { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--good); margin-right: 7px; vertical-align: 1px; }
 #theme { background: none; border: 1px solid var(--line); color: var(--soft); border-radius: 6px; width: 30px; height: 28px; cursor: pointer; font-size: 14px; }
 
-main { padding-top: 20px; }
+main { padding-top: 20px; padding-bottom: 40px; }
 .notice { background: var(--accent-bg); color: var(--ink); border-radius: 8px; padding: 9px 14px; margin-bottom: 16px; }
 
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); background: var(--card); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 16px; }
@@ -107,8 +107,6 @@ main { padding-top: 20px; }
 .head h2 { font-size: 15px; font-weight: 700; margin: 0; }
 .foot { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; padding-top: 12px; }
 .foot .more { margin-top: 0; white-space: nowrap; }
-.hint { color: var(--faint); font-size: 12.5px; }
-.verdict { margin: 14px 0 0; font-size: 15px; }
 .head .seg, .head .more.inline { margin-left: auto; }
 .title { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
 .title h1 { font-size: 22px; margin: 0; word-break: break-all; }
@@ -173,8 +171,6 @@ svg.chart .expect { fill: none; stroke: var(--ink); stroke-width: 1.5; stroke-da
 ul.plain { list-style: none; margin: 0; padding: 0; }
 ul.plain li { padding: 6px 0; border-bottom: 1px solid var(--line); word-break: break-all; }
 ul.plain li:last-child { border-bottom: 0; }
-footer { color: var(--faint); font-size: 12.5px; padding: 18px 20px 40px; }
-footer a { color: var(--accent); }
 
 @media (max-width: 640px) {
   .wrap { padding: 0 12px; }

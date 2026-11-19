@@ -43,10 +43,10 @@ test('the overview lists the labelled pool first and flags a claim the chain doe
   expect(html).toContain('too high');
 });
 
-test('a miner page says in words that the claim is too high', async () => {
+test('a miner page marks a claim above what the pool found as too high', async () => {
   const res = await fetch(`${base}/miner/${encodeURIComponent('label:Big pool')}?window=all`);
   expect(res.status).toBe(200);
-  expect(await res.text()).toContain('the claim is probably too high');
+  expect(await res.text()).toContain('tag off">too high');
 });
 
 test('the miners API counts every block once', async () => {

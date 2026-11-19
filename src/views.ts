@@ -103,7 +103,6 @@ function layout(ctx: PageCtx, title: string, current: string, body: string): str
 ${notice}
 ${body}
 </main>
-<footer class="wrap">Computed from this server's own Pearl node. "Pool says" figures are what pools publish, kept in claims.json with their source. Hover a number for how it is worked out.</footer>
 <script>
 document.getElementById('theme').addEventListener('click',()=>{const r=document.documentElement;const dark=r.dataset.theme?r.dataset.theme==='dark':matchMedia('(prefers-color-scheme: dark)').matches;r.dataset.theme=dark?'light':'dark';try{localStorage.setItem('theme',r.dataset.theme)}catch{}});
 </script>
@@ -113,11 +112,11 @@ document.getElementById('theme').addEventListener('click',()=>{const r=document.
 
 function windowTabs(current: WindowName, base: string): string {
   return `<div class="seg">${(Object.keys(WINDOWS) as WindowName[])
-    .map((w) => `<a href="${base}?window=${w}"${w === current ? ' aria-current="true"' : ''} title="${w === 'all' ? 'Every indexed block' : `Last ${int(WINDOWS[w])} blocks`}">${WINDOW_SHORT[w]}</a>`)
+    .map((w) => `<a href="${base}?window=${w}"${w === current ? ' aria-current="true"' : ''} title="${w === 'all' ? 'All blocks' : `${int(WINDOWS[w])} blocks`}">${WINDOW_SHORT[w]}</a>`)
     .join('')}</div>`;
 }
 
-const range = (lo: number, hi: number, fmt: (v: number) => string): string => `Likely between ${fmt(lo)} and ${fmt(hi)} (95% range)`;
+const range = (lo: number, hi: number, fmt: (v: number) => string): string => `${fmt(lo)} to ${fmt(hi)}`;
 
 function stats(net: Network, rows: MinerRow[], target: number): string {
   const tile = (label: string, value: string, sub: string, title = ''): string =>
@@ -125,11 +124,11 @@ function stats(net: Network, rows: MinerRow[], target: number): string {
   const plusMinus = (net.rateInterval.hi - net.rateInterval.lo) / 2 / net.rate;
   const top = rows[0];
   return `<div class="stats">
-${tile('Hashrate', rate(net.rate), `±${pct(plusMinus, 0)}`, `Likely between ${rate(net.rateInterval.lo)} and ${rate(net.rateInterval.hi)}. Measured in pearld's units, which pools do not use.`)}
-${tile('Difficulty', bigNum(net.difficulty), `<span class="${net.difficultyChange >= 0 ? 'up' : 'down'}">${net.difficultyChange >= 0 ? '+' : '−'}${pct(Math.abs(net.difficultyChange))}</span> this period`)}
+${tile('Hashrate', rate(net.rate), `±${pct(plusMinus, 0)}`, `${rate(net.rateInterval.lo)} to ${rate(net.rateInterval.hi)}`)}
+${tile('Difficulty', bigNum(net.difficulty), `<span class="${net.difficultyChange >= 0 ? 'up' : 'down'}">${net.difficultyChange >= 0 ? '+' : '−'}${pct(Math.abs(net.difficultyChange))}</span>`)}
 ${tile('Average block time', clock(net.meanInterval), `target ${clock(target)}`)}
-${tile('Active miners', int(rows.length), `found at least one of ${int(net.blocks)} blocks`)}
-${top === undefined ? '' : tile('Largest miner', pct(top.share), esc(top.labelled ? top.name : short(top.name)), `Likely between ${pct(top.shareInterval.lo)} and ${pct(top.shareInterval.hi)}`)}
+${tile('Active miners', int(rows.length), `last ${int(net.blocks)} blocks`)}
+${top === undefined ? '' : tile('Largest miner', pct(top.share), esc(top.labelled ? top.name : short(top.name)), `${pct(top.shareInterval.lo)} to ${pct(top.shareInterval.hi)}`)}
 </div>`;
 }
 
@@ -150,9 +149,7 @@ function claimCell(r: MinerRow): string {
   const c = r.claim;
   if (c === null) return '<td class="muted">not published</td>';
   const v = verdict(r);
-  const title = `${r.name} says it has ${pct(c.share)} of the network (${c.claim.source}, ${utc(c.claim.readAt).slice(0, 10)}). ` +
-    `On chain it found ${pct(r.share)} of these blocks; with normal luck its real share is between ${pct(r.shareInterval.lo)} and ${pct(r.shareInterval.hi)}. ` +
-    (v.fits ? 'The claim is inside that range.' : `The claim is outside that range, so it is probably ${v.word}.`);
+  const title = `${c.claim.source}, ${utc(c.claim.readAt).slice(0, 10)}`;
   return `<td title="${esc(title)}"><span class="claimed">${pct(c.share)}</span> <span class="${v.fits ? 'tag ok' : 'tag off'}">${v.word}</span></td>`;
 }
 
@@ -162,7 +159,7 @@ function minerRows(ctx: PageCtx, rows: MinerRow[], start = 0): string {
     .map((r, i) => `<tr>
 <td class="rank">${start + i + 1}</td>
 <td>${minerLink(r.id, r.name, r.labelled)}${r.labelled ? `<span class="sub">${r.scripts} address${r.scripts === 1 ? '' : 'es'}</span>` : ''}</td>
-<td title="Likely between ${pct(r.shareInterval.lo)} and ${pct(r.shareInterval.hi)}"><div class="share">${shareBar(r.share, r.shareInterval.lo, r.shareInterval.hi, max, r.claim?.share ?? null)}<span class="pctv">${pct(r.share)}</span></div></td>
+<td title="${pct(r.shareInterval.lo)} to ${pct(r.shareInterval.hi)}"><div class="share">${shareBar(r.share, r.shareInterval.lo, r.shareInterval.hi, max, r.claim?.share ?? null)}<span class="pctv">${pct(r.share)}</span></div></td>
 <td class="n">${int(r.blocks)}</td>
 <td class="n" title="${esc(range(r.rateInterval.lo, r.rateInterval.hi, rate))}">${rate(r.rate)}</td>
 ${claimCell(r)}
@@ -186,7 +183,7 @@ function blockRows(ctx: PageCtx, list: RecentBlock[]): string {
     .join('');
 }
 
-const BLOCK_HEAD = '<thead><tr><th class="n">Height</th><th>Miner</th><th>Mined</th><th class="n">Txs</th><th class="n">Reward PRL</th><th class="n" title="Time since the block before it. The target is 3m 14s; miners set timestamps, so single gaps are rough.">Time to find</th></tr></thead>';
+const BLOCK_HEAD = '<thead><tr><th class="n">Height</th><th>Miner</th><th>Mined</th><th class="n">Txs</th><th class="n">Reward PRL</th><th class="n">Time to find</th></tr></thead>';
 
 export function overview(ctx: PageCtx, window: WindowName): string {
   const net = network(ctx, window);
@@ -200,11 +197,11 @@ ${stats(net, rows, ctx.network.targetSpacing)}
 <section class="card">
   <div class="head"><h2>Miners</h2><span class="muted">${int(rows.length)} in the last ${int(net.blocks)} blocks</span>${windowTabs(window, '/')}</div>
   <div class="scroll"><table>${MINER_HEAD}<tbody>${minerRows(ctx, rows.slice(0, 10))}</tbody></table></div>
-  <div class="foot"><a class="more" href="/miners?window=${window}">All ${int(rows.length)} miners</a><span class="hint">Pool says: the share a pool publishes about itself. "matches" means it is within normal luck of the blocks it actually found.</span></div>
+  <div class="foot"><a class="more" href="/miners?window=${window}">All ${int(rows.length)} miners</a></div>
 </section>
 <div class="grid even">
-  <section class="card"><div class="head"><h2>Hashrate</h2><span class="muted">shaded: likely range</span></div>${lineChart(pts, (p) => p.rate, { label: 'Hashrate', unit: rate, band: (p) => [p.rateLo, p.rateHi] })}</section>
-  <section class="card"><div class="head"><h2>Block times</h2><span class="muted">bars: blocks, line: what a steady network gives</span></div>${intervalHistogram(ivs, ctx.network.targetSpacing)}</section>
+  <section class="card"><div class="head"><h2>Hashrate</h2></div>${lineChart(pts, (p) => p.rate, { label: 'Hashrate', unit: rate, band: (p) => [p.rateLo, p.rateHi] })}</section>
+  <section class="card"><div class="head"><h2>Block times</h2></div>${intervalHistogram(ivs, ctx.network.targetSpacing)}</section>
 </div>
 <section class="card">
   <div class="head"><h2>Latest blocks</h2><a class="more inline" href="/blocks">All blocks</a></div>
@@ -222,7 +219,7 @@ export function minersPage(ctx: PageCtx, window: WindowName): string {
 <section class="card">
   <div class="head"><h2>Share of blocks</h2><span class="muted">last ${int(net.blocks)} blocks</span>${windowTabs(window, '/miners')}</div>
   ${rankChart(chartRows.map((row) => ({ row, href: minerHref(row.id), label: row.labelled ? row.name : short(row.name), mono: !row.labelled })))}
-  <div class="key"><span><i class="k-dot"></i>share of blocks found, with its likely range</span><span><i class="k-claim"></i>pool says, matches</span><span><i class="k-claim off"></i>pool says, does not match</span></div>
+  <div class="key"><span><i class="k-dot"></i>found</span><span><i class="k-claim"></i>pool says, matches</span><span><i class="k-claim off"></i>pool says, off</span></div>
 </section>
 <section class="card">
   <div class="head"><h2>All miners</h2><span class="muted">${int(rows.length)}</span></div>
@@ -250,9 +247,9 @@ export function minerPage(ctx: PageCtx, id: string, window: WindowName): string 
   const hist = shareHistory(ctx, 14, WINDOWS.day).counts.get(id) ?? new Array<number>(14).fill(0);
   const tile = (k: string, v: string, s: string, title = ''): string => `<div class="stat"${title ? ` title="${esc(title)}"` : ''}><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
   const statsRow = `<div class="stats">
-${tile('Share of blocks', current === undefined ? '0%' : pct(current.share), current === undefined ? `none of the last ${int(net?.blocks ?? 0)}` : `${pct(current.shareInterval.lo)} to ${pct(current.shareInterval.hi)}`, '95% interval')}
-${tile('Blocks', int(current?.blocks ?? 0), `of ${int(net?.blocks ?? 0)} in the window`)}
-${tile('Hashrate', current === undefined ? '0' : rate(current.rate), current === undefined ? '' : `${rate(current.rateInterval.lo)} to ${rate(current.rateInterval.hi)}`, "Estimated from blocks found, in pearld's units")}
+${tile('Share of blocks', current === undefined ? '0%' : pct(current.share), current === undefined ? `none of the last ${int(net?.blocks ?? 0)}` : `${pct(current.shareInterval.lo)} to ${pct(current.shareInterval.hi)}`)}
+${tile('Blocks', int(current?.blocks ?? 0), `of ${int(net?.blocks ?? 0)}`)}
+${tile('Hashrate', current === undefined ? '0' : rate(current.rate), current === undefined ? '' : `${rate(current.rateInterval.lo)} to ${rate(current.rateInterval.hi)}`)}
 ${tile('Last block', int(all.lastHeight), `${ago(ctx.now - all.lastTime)} ago`)}
 ${tile('Per day, 14 days', sparkline(hist, WINDOWS.day), `${int(all.empty)} of ${int(all.blocks)} blocks empty`)}
 </div>`;
@@ -261,19 +258,14 @@ ${tile('Per day, 14 days', sparkline(hist, WINDOWS.day), `${int(all.empty)} of $
   if (current?.claim) {
     const c = current.claim;
     const v = verdict(current);
-    const diff = Math.round(c.expected - current.blocks);
-    const p = diff > 0 ? c.atMost : c.atLeast;
-    const odds = p < 0.0001 ? 'less than 1 time in 10,000' : p < 0.01 ? `about ${Math.max(1, Math.round(p * 1000))} times in 1,000` : `about ${Math.round(p * 100)} times in 100`;
-    const said = `${diff > 0 ? `${int(diff)} fewer` : `${int(-diff)} more`} blocks than its claim would give`;
     claim = `<section class="card">
-<div class="head"><h2>What the pool says vs what it found</h2><span class="${v.fits ? 'tag ok' : 'tag off'}">${v.fits ? 'matches' : `claim ${v.word}`}</span></div>
+<div class="head"><h2>Pool claim</h2><span class="${v.fits ? 'tag ok' : 'tag off'}">${v.word}</span></div>
 <div class="stats inner">
 ${tile('Pool says', pct(c.share), `${esc(c.claim.source)}, ${utc(c.claim.readAt).slice(0, 10)}`)}
-${tile('Found on chain', pct(current.share), `likely ${pct(current.shareInterval.lo)} to ${pct(current.shareInterval.hi)}`)}
-${tile('Blocks expected', int(Math.round(c.expected)), 'if the claim were true')}
-${tile('Blocks found', int(current.blocks), `of ${int(net?.blocks ?? 0)}`)}
+${tile('Found on chain', pct(current.share), `${pct(current.shareInterval.lo)} to ${pct(current.shareInterval.hi)}`)}
+${tile('Blocks expected', int(Math.round(c.expected)), '')}
+${tile('Blocks found', int(current.blocks), '')}
 </div>
-<p class="verdict">${Math.abs(diff) < 1 ? 'It found exactly what its claim implies.' : `It found ${said}. Luck that far off happens ${odds}${v.fits ? ', so this is within normal luck.' : `, so the claim is probably ${v.word}.`}`}</p>
 </section>`;
   }
   const l = links(ctx, id);
@@ -286,11 +278,11 @@ ${tile('Blocks found', int(current.blocks), `of ${int(net?.blocks ?? 0)}`)}
 ${statsRow}
 ${claim}
 <div class="grid even">
-<section class="card"><div class="head"><h2>Addresses</h2><span class="muted">${entry !== undefined ? `labelled from ${esc(entry.source)}` : 'not labelled'}</span></div>
+<section class="card"><div class="head"><h2>Addresses</h2><span class="muted">${entry !== undefined ? esc(entry.source) : ''}</span></div>
 <ul class="plain">${scripts.map((s) => `<li class="mono">${esc(s)}</li>`).join('')}</ul>
 ${all.tags.length > 0 ? `<p class="muted">Coinbase text: ${all.tags.map((t) => `"${esc(t)}"`).join(', ')}</p>` : ''}</section>
 <section class="card"><div class="head"><h2>Linked by spending</h2></div>
-${linkItems.length === 0 ? '<p class="muted">Nothing yet.</p>' : `<ul class="plain">${linkItems.join('')}</ul>`}</section>
+${linkItems.length === 0 ? '<p class="muted">None</p>' : `<ul class="plain">${linkItems.join('')}</ul>`}</section>
 </div>
 <section class="card"><div class="head"><h2>Latest blocks</h2></div>
 <div class="scroll"><table>${BLOCK_HEAD}<tbody>${blockRows(ctx, recentBlocks(ctx, 15, { id }))}</tbody></table></div></section>`);
