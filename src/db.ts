@@ -67,7 +67,8 @@ export class Store {
 
   constructor(path: string) {
     this.db = new DatabaseSync(path);
-    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = OFF;');
+    // The indexer writes while the web server reads the same file; wait for a lock instead of failing.
+    this.db.exec('PRAGMA busy_timeout = 10000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = OFF;');
     this.db.exec(SCHEMA);
   }
 
