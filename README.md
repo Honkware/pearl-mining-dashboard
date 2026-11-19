@@ -138,7 +138,7 @@ All these files are reread when they change.
 
 - `/api/network.json`, `/api/miners.json`, `/api/blocks.json`, `/api/stale.json`.
 
-In the miners table, "Pool claims" is the share a pool publishes about itself, and the column only appears when a miner in view has one. "matches" means the claim is inside the 95% range of what the pool's blocks show; "too high" or "too low" means it is outside, which normal luck produces less than 5 times in 100. A claim is only tested against blocks up to a day after it was read. Hovering a share or hashrate shows its range.
+In the miners table, "Pool claims" is the share a pool publishes about itself, and the column only appears when a miner in view has one. "matches" means the claim is inside the 95% range of what the pool's blocks show; "too high" or "too low" means it is outside, which normal luck produces less than 5 times in 100. A claim describes the pool now, so it is only tested on the 1D and 1W windows. Hovering a share or hashrate shows its range.
 
 ## What it can and cannot tell you
 

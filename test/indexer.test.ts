@@ -162,7 +162,8 @@ describe('indexer', () => {
     await indexToTip(chain, store);
     const labels = parseLabels(JSON.stringify({ identities: [{ label: 'Small pool', scripts: [testAddress(12, net)], source: 'test' }] }), net);
     const claims = parseClaims(JSON.stringify({ claims: [{ label: 'Small pool', share: 0.4, readAt: chain.time, source: 'test' }] }));
-    const row = miners({ store, network: net, labels, claims }, 'all').find((r) => r.name === 'Small pool')!;
+    // Claims are held against the last day or week; this chain is shorter than a week of blocks.
+    const row = miners({ store, network: net, labels, claims }, 'week').find((r) => r.name === 'Small pool')!;
     expect(row.blocks).toBe(40);
     expect(row.claim!.expected).toBeCloseTo(0.4 * chain.height, 6);
     expect(row.claim!.atMost).toBeLessThan(1e-6);

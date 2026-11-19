@@ -205,7 +205,8 @@ export function miners(ctx: Context, window: WindowName): MinerRow[] {
     const ci = countInterval(k);
     const name = identityName(id, ctx.network);
     const labelled = id.startsWith('label:');
-    const claim = labelled ? claimFor(ctx, name, tip) : null;
+    // A claim describes the pool now; it is only held against the last day or week of blocks.
+    const claim = labelled && (window === 'day' || window === 'week') ? claimFor(ctx, name, tip) : null;
     const last = g.blocks[g.blocks.length - 1]!;
     let test: ClaimTest | null = null;
     if (claim !== null) {

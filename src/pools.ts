@@ -109,8 +109,11 @@ export const POOLS: PoolSource[] = [
   {
     label: '2Miners',
     site: 'https://prl.2miners.com',
-    urls: ['https://prl.2miners.com/api/blocks'],
-    parse: ([b]) => ({ blockHashes: openEthereumPoolHashes(b) }),
+    urls: ['https://prl.2miners.com/api/blocks', 'https://prl.2miners.com/api/stats'],
+    parse: ([b, s]) => ({
+      blockHashes: openEthereumPoolHashes(b),
+      claim: { hashrate: s.hashrate, networkHashrate: Number(s.nodes[0].networkhashps) },
+    }),
   },
   {
     // Solo blocks pay the miner who found them, so these addresses are 2Miners' solo users, not 2Miners.
@@ -151,14 +154,21 @@ export interface TrackerSource {
   name: string;
   urls: string[];
   parse(bodies: Json[]): { pool: string; address: string }[];
+  /** Pool hashrates it republishes, used for pools whose own site gives none. */
+  claims?(bodies: Json[]): { pool: string; hashrate: number; networkHashrate: number }[];
 }
 
 // Read after the pools' own data, in this order; an address already named keeps its name.
 export const TRACKERS: TrackerSource[] = [
   {
     name: 'pearlstation.io',
-    urls: ['https://pearlstation.io/api/blocks'],
+    urls: ['https://pearlstation.io/api/blocks', 'https://pearlstation.io/api/pools', 'https://pearlstation.io/api/network'],
     parse: ([b]) => b.recent.filter((x: Json) => x.pool && x.addr).map((x: Json) => ({ pool: x.name, address: x.addr })),
+    claims: ([, pools, net]) => {
+      // Its latest network hashrate, from the same site, so the share is in one unit.
+      const network = net.ranges.day.at(-1)?.[1] ?? 0;
+      return pools.pools.filter((p: Json) => typeof p.hashrate === 'number' && p.hashrate > 0).map((p: Json) => ({ pool: p.name, hashrate: p.hashrate, networkHashrate: network }));
+    },
   },
   {
     name: 'pearltrack.io',
@@ -260,7 +270,9 @@ export interface PoolsRun {
   clashes: string[][];
 }
 
-const sameName = (a: string): string => a.toLowerCase().replace(/[^a-z0-9]/g, '');
+// Trackers spell pools their own way: "Lucky Pool", "skypool.org", "Jetski" for LuckyPool, Skypool, Jetski Pool.
+const sameName = (a: string): string =>
+  a.toLowerCase().replace(/\.(com|org|io|xyz|net|tech)$/, '').replace(/[^a-z0-9]/g, '').replace(/pool$/, '');
 
 export async function collectPools(opts: { store: Store; network: PearlNetwork; dataDir: string; now: number; fetch?: typeof fetch; pools?: PoolSource[]; trackers?: TrackerSource[] }): Promise<PoolsRun> {
   const get = opts.fetch ?? fetch;
@@ -289,6 +301,7 @@ export async function collectPools(opts: { store: Store; network: PearlNetwork; 
   }
 
   const trackerLabels: LabelEntry[] = [];
+  const trackerClaims: Claim[] = [];
   const named = (): Set<string> => new Set([...results.flatMap((r) => [...r.scripts.keys()]), ...trackerLabels.flatMap((l) => l.scripts)]);
   for (const t of opts.trackers ?? TRACKERS) {
     try {
@@ -315,6 +328,12 @@ export async function collectPools(opts: { store: Store; network: PearlNetwork; 
         taken.add(script);
       }
       for (const [label, scripts] of byPool) trackerLabels.push({ label, scripts, source: `${t.name}, read ${day}` });
+      for (const c of t.claims?.(bodies) ?? []) {
+        const label = results.find((r) => sameName(r.label) === sameName(c.pool))?.label ?? trackerLabels.find((l) => sameName(l.label) === sameName(c.pool))?.label ?? c.pool;
+        if (c.networkHashrate > 0 && !trackerClaims.some((x) => x.label === label) && !results.some((r) => r.label === label && r.claim !== undefined)) {
+          trackerClaims.push({ label, hashrate: c.hashrate, networkHashrate: c.networkHashrate, readAt: opts.now, source: t.name });
+        }
+      }
     } catch (err) {
       results.push({ label: t.name, scripts: new Map(), matched: 0, published: 0, kind: 'blocks', error: err instanceof Error ? err.message : String(err) });
     }
@@ -338,7 +357,7 @@ export async function collectPools(opts: { store: Store; network: PearlNetwork; 
     .filter((l) => l.scripts.length > 0)
     .concat(trackerLabels);
   const linked = linkBySpending(opts.store, labels, day);
-  const claims = results.flatMap((r) => (r.claim === undefined ? [] : [r.claim]));
+  const claims = [...results.flatMap((r) => (r.claim === undefined ? [] : [r.claim])), ...trackerClaims];
   return { results, labels: [...labels, ...linked.added], claims, conflicts, clashes: linked.clashes };
 }
 

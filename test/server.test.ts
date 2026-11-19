@@ -37,16 +37,21 @@ afterAll(() => {
 });
 
 test('the overview lists the labelled pool first and flags a claim the chain does not support', async () => {
-  const html = await (await fetch(`${base}/?window=all`)).text();
+  const html = await (await fetch(`${base}/?window=week`)).text();
   expect(html).toContain('Big pool');
   expect(html.indexOf('Big pool')).toBeLessThan(html.indexOf(testAddress(20, net).slice(0, 10)));
   expect(html).toContain('too high');
 });
 
 test('a miner page marks a claim above what the pool found as too high', async () => {
-  const res = await fetch(`${base}/miner/${encodeURIComponent('label:Big pool')}?window=all`);
+  const res = await fetch(`${base}/miner/${encodeURIComponent('label:Big pool')}?window=week`);
   expect(res.status).toBe(200);
   expect(await res.text()).toContain('tag off">too high');
+});
+
+test('a claim is not held against the 30-day or all-time window', async () => {
+  const html = await (await fetch(`${base}/?window=all`)).text();
+  expect(html).not.toContain('Pool claims');
 });
 
 test('the miners API counts every block once', async () => {
