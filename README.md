@@ -166,4 +166,4 @@ PEARLD=../.work/regtest/bin/pearld PEARL_CHAIN=../.work/regtest/chain/setup-bloc
 - An identity is the address of the largest coinbase output. A pool that pays every miner straight from the coinbase shows as its largest payee, and a pool that rotates addresses shows as several miners until a pool feed, a tracker or a co-spend names them.
 - Solo pools' blocks pay the miner who found them; those addresses are named "<pool> Solo", not as the pool.
 - Testnet stops at height 67370, where certificates move to V4, until pearljs parses them. See `PEARLJS-GAPS.md`.
-- Mainnet: first run 2026-11-18 against pearld 1.5.7. A full sync from genesis took hours, mostly pearld fetching certificate-bearing headers from one peer at a time.
+- Mainnet: first run 2026-11-18 against pearld 1.5.7. The node's sync from genesis to block 145,331 took 173 minutes, mostly pearld fetching certificate-bearing headers from one peer at a time; the indexer keeps up with it at about 3,000 blocks a minute.

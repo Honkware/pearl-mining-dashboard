@@ -65,7 +65,8 @@ export interface PageCtx extends Context {
 /** What a miner is called on the page: its label, its coinbase tag, "Unnamed pool", or its address. */
 function minerTitle(r: Pick<MinerRow, 'name' | 'labelled' | 'tags' | 'paysOut'>): { text: string; mono: boolean } {
   if (r.labelled) return { text: r.name, mono: false };
-  if (r.tags.length > 0) return { text: r.tags[0]!, mono: false };
+  // "/F2Pool/" reads as "F2Pool"; the slashes are only how coinbase tags are written.
+  if (r.tags.length > 0) return { text: r.tags[0]!.replace(/^\/+|\/+$/g, '').replace(/\//g, ' / '), mono: false };
   if (r.paysOut) return { text: 'Unnamed pool', mono: false };
   return { text: short(r.name), mono: true };
 }
