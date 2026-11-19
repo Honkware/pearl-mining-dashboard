@@ -1,5 +1,5 @@
 // HTML pages. The overview is for a glance: headline numbers, the miners,
-// the latest blocks. Definitions live in tooltips and on the method page.
+// the latest blocks. Definitions live in tooltips.
 import {
   WINDOWS,
   intervals,
