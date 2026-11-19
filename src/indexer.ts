@@ -1,7 +1,7 @@
 // Follows the node's best chain into the store. Each event and the
 // follower's cursor are written in one transaction, so a crash between
 // blocks resumes exactly where the store stands.
-import { watchChain, type ChainWatch, type FollowEvent, type PearlNetwork, type PearldRpc } from 'pearljs';
+import { watchChain, type ChainWatch, type FollowEvent, type FollowOptions, type PearlNetwork, type PearldRpc } from 'pearljs';
 import { blockFacts, coinbaseSpends } from './facts.js';
 import type { Store } from './db.js';
 
@@ -13,6 +13,8 @@ export interface IndexerOptions {
   startHeight?: number;
   stopAtTip?: boolean;
   pollInterval?: number;
+  /** pearld's block notifications, so a new block is indexed the moment it is announced. */
+  ws?: FollowOptions['ws'];
   /** Clock for stale records, Unix seconds. */
   now?: () => number;
   onEvent?: (event: FollowEvent) => void;
@@ -34,10 +36,12 @@ export function startIndexer(opts: IndexerOptions): ChainWatch {
     from,
     stopAtTip: opts.stopAtTip ?? false,
     ...(opts.pollInterval === undefined ? {} : { pollInterval: opts.pollInterval }),
+    ...(opts.ws === undefined ? {} : { ws: opts.ws }),
     onRetry: (err, attempt) => log(`[index] retry ${attempt}: ${err.message}`),
     onEvent: async (event, cursor) => {
       if (event.type === 'connected') {
         const facts = blockFacts(event.block, event.height, event.hash, network);
+        if (facts.checkFailed !== null) log(`[index] block ${event.height} ${event.hash} failed ${facts.checkFailed}`);
         store.tx(() => {
           store.connect(facts, coinbaseSpends(event.block, (o) => store.isCoinbaseOutput(o)));
           store.setCursor(cursor);

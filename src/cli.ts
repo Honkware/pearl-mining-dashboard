@@ -40,13 +40,14 @@ async function main(): Promise<void> {
     store.close();
     return;
   }
-  const { client, network } = nodeFromEnv();
+  const { client, ws, network } = nodeFromEnv();
   const store = new Store(join(dataDir, `${network.name}.sqlite`));
 
   if (cmd === 'index') {
     const watch = startIndexer({
       store,
       rpc: client,
+      ws,
       network,
       startHeight: Number(process.env.START_HEIGHT ?? 0),
       stopAtTip: process.env.STOP_AT_TIP === '1',
@@ -56,12 +57,14 @@ async function main(): Promise<void> {
     process.on('SIGINT', stop);
     process.on('SIGTERM', stop);
     await watch.done;
+    await ws.close();
     store.close();
     log('[index] stopped');
     return;
   }
   if (cmd === 'serve') {
     const { serve } = await import('./server.js');
+    void ws.close();
     await serve({ store, network, dataDir, port: Number(process.env.PORT ?? 8080), host: process.env.HOST ?? '127.0.0.1', nodeHeight: () => client.getBlockCount(), log });
     return;
   }

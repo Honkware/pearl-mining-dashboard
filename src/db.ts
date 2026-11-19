@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS blocks (
   tag TEXT,
   coinbase_data TEXT NOT NULL,
   payout_script TEXT NOT NULL,
-  payout_count INTEGER NOT NULL
+  payout_count INTEGER NOT NULL,
+  check_failed TEXT
 );
 CREATE INDEX IF NOT EXISTS blocks_time ON blocks (time);
 CREATE INDEX IF NOT EXISTS blocks_payout ON blocks (payout_script, height);
@@ -70,6 +71,16 @@ export class Store {
     // The indexer writes while the web server reads the same file; wait for a lock instead of failing.
     this.db.exec('PRAGMA busy_timeout = 10000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = OFF;');
     this.db.exec(SCHEMA);
+    // Stores made before blocks were checked lack the column; their blocks count as unchecked (NULL).
+    const cols = this.db.prepare('PRAGMA table_info(blocks)').all() as { name: string }[];
+    if (!cols.some((c) => c.name === 'check_failed')) {
+      try {
+        this.db.exec('ALTER TABLE blocks ADD COLUMN check_failed TEXT');
+      } catch (err) {
+        // The indexer and the web server open the store together; the other one may have just added it.
+        if (!String(err).includes('duplicate column')) throw err;
+      }
+    }
   }
 
   close(): void {
@@ -116,12 +127,12 @@ export class Store {
     this.db
       .prepare(
         `INSERT INTO blocks (height, hash, prev, time, bits, difficulty, work, cert_version, cert_kind, tx_count, size, vsize,
-          coinbase_txid, reward, subsidy, tag, coinbase_data, payout_script, payout_count)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          coinbase_txid, reward, subsidy, tag, coinbase_data, payout_script, payout_count, check_failed)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         f.height, f.hash, f.prev, f.time, f.bits, f.difficulty, f.work, f.certVersion, f.certKind, f.txCount, f.size, f.vsize,
-        f.coinbaseTxid, f.reward, f.subsidy, f.tag, JSON.stringify(f.coinbaseData), f.payoutScript, f.payouts.length,
+        f.coinbaseTxid, f.reward, f.subsidy, f.tag, JSON.stringify(f.coinbaseData), f.payoutScript, f.payouts.length, f.checkFailed,
       );
     const payout = this.db.prepare('INSERT INTO payouts (height, txid, vout, value, script, address) VALUES (?, ?, ?, ?, ?, ?)');
     for (const p of f.payouts) payout.run(f.height, f.coinbaseTxid, p.vout, p.value, p.script, p.address);

@@ -1,5 +1,9 @@
 // What one block says about its miner, read from the block alone.
 import {
+  checkCertificateBinding,
+  checkCertificateRules,
+  checkMerkleRoot,
+  checkWitnessCommitment,
   blockSize,
   blockSubsidy,
   blockVsize,
@@ -42,6 +46,8 @@ export interface BlockFacts {
   payouts: Payout[];
   /** Script of the largest paying output: what identifies the miner. */
   payoutScript: string;
+  /** null when every pearljs check passed, else the first that failed. */
+  checkFailed: string | null;
 }
 
 export interface CoinbaseSpend {
@@ -77,6 +83,30 @@ export function coinbaseTag(script: Uint8Array): string | null {
     .toString('latin1')
     .match(/[\x20-\x7e]{4,}/g);
   return runs === null ? null : cleanTag(runs.join(' ')) || null;
+}
+
+/**
+ * pearljs's own checks of a block pearld accepted: the header's Merkle root,
+ * the coinbase's witness commitment, the certificate's binding to the header
+ * and its version for the height. Returns the first failure, or null. The
+ * hardcoded genesis block is skipped; it is built outside these rules.
+ */
+export function checkBlock(block: PearlBlock, height: number, network: PearlNetwork): string | null {
+  if (height === 0) return null;
+  const checks: [string, () => void][] = [
+    ['checkMerkleRoot', () => checkMerkleRoot(block)],
+    ['checkWitnessCommitment', () => checkWitnessCommitment(block)],
+    ['checkCertificateBinding', () => checkCertificateBinding(block)],
+    ['checkCertificateRules', () => checkCertificateRules(block.certificate, network, height)],
+  ];
+  for (const [name, run] of checks) {
+    try {
+      run();
+    } catch (err) {
+      return `${name}: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+  return null;
 }
 
 export function blockFacts(block: PearlBlock, height: number, hash: string, network: PearlNetwork): BlockFacts {
@@ -115,6 +145,7 @@ export function blockFacts(block: PearlBlock, height: number, hash: string, netw
     coinbaseData,
     payouts,
     payoutScript: top?.script ?? 'none',
+    checkFailed: checkBlock(block, height, network),
   };
 }
 
