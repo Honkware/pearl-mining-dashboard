@@ -2,7 +2,6 @@
 // the latest blocks. Definitions live in tooltips and on the method page.
 import {
   WINDOWS,
-  claimEffort,
   intervals,
   links,
   miners,
@@ -16,7 +15,7 @@ import {
   type RecentBlock,
   type WindowName,
 } from './analysis.js';
-import { effortStrip, esc, intervalHistogram, lineChart, pct, rankChart, shareBar, sparkline } from './charts.js';
+import { esc, intervalHistogram, lineChart, pct, rankChart, shareBar, sparkline } from './charts.js';
 
 const GRAIN = 100_000_000n;
 const int = (n: number): string => n.toLocaleString('en-US');
@@ -75,7 +74,7 @@ function minerLink(id: string, name: string, labelled = id.startsWith('label:'))
 
 function layout(ctx: PageCtx, title: string, current: string, body: string): string {
   const tip = recentBlocks(ctx, 1)[0];
-  const nav = [['/', 'Overview'], ['/miners', 'Miners'], ['/blocks', 'Blocks'], ['/method', 'Method']]
+  const nav = [['/', 'Overview'], ['/miners', 'Miners'], ['/blocks', 'Blocks']]
     .map(([href, text]) => `<a href="${href}"${href === current ? ' aria-current="page"' : ''}>${text}</a>`)
     .join('');
   let notice = '';
@@ -104,7 +103,7 @@ function layout(ctx: PageCtx, title: string, current: string, body: string): str
 ${notice}
 ${body}
 </main>
-<footer class="wrap">Computed from this server's own node. Pool numbers are claims from claims.json. <a href="/method">Method</a></footer>
+<footer class="wrap">Computed from this server's own Pearl node. "Pool says" figures are what pools publish, kept in claims.json with their source. Hover a number for how it is worked out.</footer>
 <script>
 document.getElementById('theme').addEventListener('click',()=>{const r=document.documentElement;const dark=r.dataset.theme?r.dataset.theme==='dark':matchMedia('(prefers-color-scheme: dark)').matches;r.dataset.theme=dark?'light':'dark';try{localStorage.setItem('theme',r.dataset.theme)}catch{}});
 </script>
@@ -118,30 +117,43 @@ function windowTabs(current: WindowName, base: string): string {
     .join('')}</div>`;
 }
 
-const range = (lo: number, hi: number, fmt: (v: number) => string): string => `95% interval ${fmt(lo)} to ${fmt(hi)}`;
+const range = (lo: number, hi: number, fmt: (v: number) => string): string => `Likely between ${fmt(lo)} and ${fmt(hi)} (95% range)`;
 
-function stats(net: Network, top: MinerRow | undefined, target: number): string {
+function stats(net: Network, rows: MinerRow[], target: number): string {
   const tile = (label: string, value: string, sub: string, title = ''): string =>
     `<div class="stat"${title ? ` title="${esc(title)}"` : ''}><div class="k">${label}</div><div class="v">${value}</div><div class="s">${sub}</div></div>`;
   const plusMinus = (net.rateInterval.hi - net.rateInterval.lo) / 2 / net.rate;
-  const effortClass = net.effort <= 1 ? 'good' : net.effort > 1.25 ? 'bad' : '';
+  const top = rows[0];
   return `<div class="stats">
-${tile('Hashrate', rate(net.rate), `±${pct(plusMinus, 0)}`, `${range(net.rateInterval.lo, net.rateInterval.hi, rate)}. In pearld's units, as getnetworkhashps.`)}
-${tile('Difficulty', bigNum(net.difficulty), `<span class="${net.difficultyChange >= 0 ? 'up' : 'down'}">${net.difficultyChange >= 0 ? '+' : '−'}${pct(Math.abs(net.difficultyChange))}</span> this window`)}
-${tile('Block time', `${net.meanInterval.toFixed(0)}s`, `target ${target}s`)}
-${tile('Network effort', `<span class="${effortClass}">${pct(net.effort, 0)}</span>`, 'time taken vs expected', 'The window took this share of the time its blocks should take at the target spacing.')}
-${top === undefined ? '' : tile('Largest miner', pct(top.share), esc(top.labelled ? top.name : short(top.name)), range(top.shareInterval.lo, top.shareInterval.hi, pct))}
+${tile('Hashrate', rate(net.rate), `±${pct(plusMinus, 0)}`, `Likely between ${rate(net.rateInterval.lo)} and ${rate(net.rateInterval.hi)}. Measured in pearld's units, which pools do not use.`)}
+${tile('Difficulty', bigNum(net.difficulty), `<span class="${net.difficultyChange >= 0 ? 'up' : 'down'}">${net.difficultyChange >= 0 ? '+' : '−'}${pct(Math.abs(net.difficultyChange))}</span> this period`)}
+${tile('Average block time', clock(net.meanInterval), `target ${clock(target)}`)}
+${tile('Active miners', int(rows.length), `found at least one of ${int(net.blocks)} blocks`)}
+${top === undefined ? '' : tile('Largest miner', pct(top.share), esc(top.labelled ? top.name : short(top.name)), `Likely between ${pct(top.shareInterval.lo)} and ${pct(top.shareInterval.hi)}`)}
 </div>`;
+}
+
+/** 194 as "3m 14s". */
+function clock(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+}
+
+function verdict(r: MinerRow): { fits: boolean; word: string } {
+  const c = r.claim!;
+  if (c.share > r.shareInterval.hi) return { fits: false, word: 'too high' };
+  if (c.share < r.shareInterval.lo) return { fits: false, word: 'too low' };
+  return { fits: true, word: 'matches' };
 }
 
 function claimCell(r: MinerRow): string {
   const c = r.claim;
-  if (c === null) return '<td class="muted">none</td>';
-  const outside = c.share < r.shareInterval.lo || c.share > r.shareInterval.hi;
-  const below = r.blocks < c.expected;
-  const p = below ? c.atMost : c.atLeast;
-  const title = `${c.claim.source} claims ${pct(c.share)} (read ${utc(c.claim.readAt).slice(0, 10)}). Found ${r.blocks} of ${c.expected.toFixed(0)} expected. Probability of ${below ? 'this few or fewer' : 'this many or more'} if the claim were true: ${p < 0.0001 ? 'under 0.0001' : p.toFixed(4)}.`;
-  return `<td title="${esc(title)}"><span class="claimed">${pct(c.share)}</span> <span class="${outside ? 'tag off' : 'tag ok'}">${outside ? (c.share > r.shareInterval.hi ? 'too high' : 'too low') : 'fits'}</span></td>`;
+  if (c === null) return '<td class="muted">not published</td>';
+  const v = verdict(r);
+  const title = `${r.name} says it has ${pct(c.share)} of the network (${c.claim.source}, ${utc(c.claim.readAt).slice(0, 10)}). ` +
+    `On chain it found ${pct(r.share)} of these blocks; with normal luck its real share is between ${pct(r.shareInterval.lo)} and ${pct(r.shareInterval.hi)}. ` +
+    (v.fits ? 'The claim is inside that range.' : `The claim is outside that range, so it is probably ${v.word}.`);
+  return `<td title="${esc(title)}"><span class="claimed">${pct(c.share)}</span> <span class="${v.fits ? 'tag ok' : 'tag off'}">${v.word}</span></td>`;
 }
 
 function minerRows(ctx: PageCtx, rows: MinerRow[], start = 0): string {
@@ -150,7 +162,7 @@ function minerRows(ctx: PageCtx, rows: MinerRow[], start = 0): string {
     .map((r, i) => `<tr>
 <td class="rank">${start + i + 1}</td>
 <td>${minerLink(r.id, r.name, r.labelled)}${r.labelled ? `<span class="sub">${r.scripts} address${r.scripts === 1 ? '' : 'es'}</span>` : ''}</td>
-<td class="share" title="${esc(range(r.shareInterval.lo, r.shareInterval.hi, pct))}">${shareBar(r.share, r.shareInterval.lo, r.shareInterval.hi, max, r.claim?.share ?? null)}<span class="pctv">${pct(r.share)}</span></td>
+<td title="Likely between ${pct(r.shareInterval.lo)} and ${pct(r.shareInterval.hi)}"><div class="share">${shareBar(r.share, r.shareInterval.lo, r.shareInterval.hi, max, r.claim?.share ?? null)}<span class="pctv">${pct(r.share)}</span></div></td>
 <td class="n">${int(r.blocks)}</td>
 <td class="n" title="${esc(range(r.rateInterval.lo, r.rateInterval.hi, rate))}">${rate(r.rate)}</td>
 ${claimCell(r)}
@@ -159,13 +171,7 @@ ${claimCell(r)}
     .join('');
 }
 
-const MINER_HEAD = '<thead><tr><th></th><th>Miner</th><th>Share of blocks</th><th class="n">Blocks</th><th class="n">Hashrate</th><th>Claimed</th><th class="n">Last block</th></tr></thead>';
-
-function effortCell(b: RecentBlock, target: number): string {
-  if (b.interval === null) return '<td class="n"></td>';
-  const e = b.interval / target;
-  return `<td class="n"><span class="${e <= 1 ? 'good' : e > 2 ? 'bad' : ''}" title="${b.interval}s after its parent, target ${target}s">${pct(Math.max(0, e), 0)}</span></td>`;
-}
+const MINER_HEAD = '<thead><tr><th></th><th>Miner</th><th>Share of blocks</th><th class="n">Blocks</th><th class="n">Hashrate</th><th>Pool says</th><th class="n">Last block</th></tr></thead>';
 
 function blockRows(ctx: PageCtx, list: RecentBlock[]): string {
   return list
@@ -175,12 +181,12 @@ function blockRows(ctx: PageCtx, list: RecentBlock[]): string {
 <td class="muted" title="${utc(b.time)} UTC">${ago(ctx.now - b.time)} ago</td>
 <td class="n">${int(b.txCount)}</td>
 <td class="n">${prl(b.reward)}</td>
-${effortCell(b, ctx.network.targetSpacing)}
+<td class="n">${b.interval === null ? '' : b.interval < 0 ? 'before parent' : clock(b.interval)}</td>
 </tr>`)
     .join('');
 }
 
-const BLOCK_HEAD = '<thead><tr><th class="n">Height</th><th>Miner</th><th>Mined</th><th class="n">Txs</th><th class="n">Reward PRL</th><th class="n" title="Time since the previous block over the 194 s target">Effort</th></tr></thead>';
+const BLOCK_HEAD = '<thead><tr><th class="n">Height</th><th>Miner</th><th>Mined</th><th class="n">Txs</th><th class="n">Reward PRL</th><th class="n" title="Time since the block before it. The target is 3m 14s; miners set timestamps, so single gaps are rough.">Time to find</th></tr></thead>';
 
 export function overview(ctx: PageCtx, window: WindowName): string {
   const net = network(ctx, window);
@@ -190,18 +196,15 @@ export function overview(ctx: PageCtx, window: WindowName): string {
   const pts = series(ctx, window, per);
   const ivs = intervals(ctx, window).filter((s) => s >= 0);
   return layout(ctx, 'Pearl mining', '/', `
-${stats(net, rows[0], ctx.network.targetSpacing)}
-<div class="grid">
-  <section class="card">
-    <div class="head"><h2>Miners</h2><span class="muted">${int(rows.length)} in the last ${int(net.blocks)} blocks</span>${windowTabs(window, '/')}</div>
-    <div class="scroll"><table>${MINER_HEAD}<tbody>${minerRows(ctx, rows.slice(0, 10))}</tbody></table></div>
-    <a class="more" href="/miners?window=${window}">All ${int(rows.length)} miners</a>
-  </section>
-  <div class="side">
-    <section class="card"><div class="head"><h2>Hashrate</h2><span class="muted">per ${int(per)} blocks</span></div>${lineChart(pts, (p) => p.rate, { label: 'Hashrate', unit: rate, band: (p) => [p.rateLo, p.rateHi], width: 420 })}</section>
-    <section class="card"><div class="head"><h2>Difficulty</h2></div>${lineChart(pts, (p) => p.difficulty, { label: 'Difficulty', unit: bigNum, step: true, width: 420 })}</section>
-    <section class="card"><div class="head"><h2>Block times</h2><span class="muted">vs a steady ${ctx.network.targetSpacing}s</span></div>${intervalHistogram(ivs, ctx.network.targetSpacing, 420)}</section>
-  </div>
+${stats(net, rows, ctx.network.targetSpacing)}
+<section class="card">
+  <div class="head"><h2>Miners</h2><span class="muted">${int(rows.length)} in the last ${int(net.blocks)} blocks</span>${windowTabs(window, '/')}</div>
+  <div class="scroll"><table>${MINER_HEAD}<tbody>${minerRows(ctx, rows.slice(0, 10))}</tbody></table></div>
+  <div class="foot"><a class="more" href="/miners?window=${window}">All ${int(rows.length)} miners</a><span class="hint">Pool says: the share a pool publishes about itself. "matches" means it is within normal luck of the blocks it actually found.</span></div>
+</section>
+<div class="grid even">
+  <section class="card"><div class="head"><h2>Hashrate</h2><span class="muted">shaded: likely range</span></div>${lineChart(pts, (p) => p.rate, { label: 'Hashrate', unit: rate, band: (p) => [p.rateLo, p.rateHi] })}</section>
+  <section class="card"><div class="head"><h2>Block times</h2><span class="muted">bars: blocks, line: what a steady network gives</span></div>${intervalHistogram(ivs, ctx.network.targetSpacing)}</section>
 </div>
 <section class="card">
   <div class="head"><h2>Latest blocks</h2><a class="more inline" href="/blocks">All blocks</a></div>
@@ -217,9 +220,9 @@ export function minersPage(ctx: PageCtx, window: WindowName): string {
   const body = minerRows(ctx, rows.slice(0, 500));
   return layout(ctx, 'Miners: Pearl mining', '/miners', `
 <section class="card">
-  <div class="head"><h2>Share of blocks</h2><span class="muted">last ${int(net.blocks)} blocks, with 95% intervals and claims</span>${windowTabs(window, '/miners')}</div>
+  <div class="head"><h2>Share of blocks</h2><span class="muted">last ${int(net.blocks)} blocks</span>${windowTabs(window, '/miners')}</div>
   ${rankChart(chartRows.map((row) => ({ row, href: minerHref(row.id), label: row.labelled ? row.name : short(row.name), mono: !row.labelled })))}
-  <div class="key"><span><i class="k-dot"></i>found on chain, with interval</span><span><i class="k-claim"></i>claimed, fits</span><span><i class="k-claim off"></i>claimed, does not fit</span></div>
+  <div class="key"><span><i class="k-dot"></i>share of blocks found, with its likely range</span><span><i class="k-claim"></i>pool says, matches</span><span><i class="k-claim off"></i>pool says, does not match</span></div>
 </section>
 <section class="card">
   <div class="head"><h2>All miners</h2><span class="muted">${int(rows.length)}</span></div>
@@ -257,20 +260,20 @@ ${tile('Per day, 14 days', sparkline(hist, WINDOWS.day), `${int(all.empty)} of $
   let claim = '';
   if (current?.claim) {
     const c = current.claim;
-    const pts = claimEffort(ctx, id, c.share, window);
-    const outside = c.share < current.shareInterval.lo || c.share > current.shareInterval.hi;
-    const below = current.blocks < c.expected;
-    const p = below ? c.atMost : c.atLeast;
+    const v = verdict(current);
+    const diff = Math.round(c.expected - current.blocks);
+    const p = diff > 0 ? c.atMost : c.atLeast;
+    const odds = p < 0.0001 ? 'less than 1 time in 10,000' : p < 0.01 ? `about ${Math.max(1, Math.round(p * 1000))} times in 1,000` : `about ${Math.round(p * 100)} times in 100`;
+    const said = `${diff > 0 ? `${int(diff)} fewer` : `${int(-diff)} more`} blocks than its claim would give`;
     claim = `<section class="card">
-<div class="head"><h2>Claim check</h2><span class="${outside ? 'tag off' : 'tag ok'}">${outside ? 'does not fit the chain' : 'fits the chain'}</span></div>
+<div class="head"><h2>What the pool says vs what it found</h2><span class="${v.fits ? 'tag ok' : 'tag off'}">${v.fits ? 'matches' : `claim ${v.word}`}</span></div>
 <div class="stats inner">
-${tile('Claimed', pct(c.share), `${esc(c.claim.source)}, ${utc(c.claim.readAt).slice(0, 10)}`)}
-${tile('Expected blocks', c.expected.toFixed(0), 'at the claimed share')}
-${tile('Found', int(current.blocks), `luck ${pct(c.luck, 0)}`)}
-${tile('Probability', p < 0.0001 ? '< 0.0001' : p.toFixed(4), below ? 'of this few or fewer' : 'of this many or more')}
+${tile('Pool says', pct(c.share), `${esc(c.claim.source)}, ${utc(c.claim.readAt).slice(0, 10)}`)}
+${tile('Found on chain', pct(current.share), `likely ${pct(current.shareInterval.lo)} to ${pct(current.shareInterval.hi)}`)}
+${tile('Blocks expected', int(Math.round(c.expected)), 'if the claim were true')}
+${tile('Blocks found', int(current.blocks), `of ${int(net?.blocks ?? 0)}`)}
 </div>
-<div class="head sub"><h3>Effort per block at the claimed share</h3></div>
-${effortStrip(pts)}
+<p class="verdict">${Math.abs(diff) < 1 ? 'It found exactly what its claim implies.' : `It found ${said}. Luck that far off happens ${odds}${v.fits ? ', so this is within normal luck.' : `, so the claim is probably ${v.word}.`}`}</p>
 </section>`;
   }
   const l = links(ctx, id);
@@ -291,22 +294,4 @@ ${linkItems.length === 0 ? '<p class="muted">Nothing yet.</p>' : `<ul class="pla
 </div>
 <section class="card"><div class="head"><h2>Latest blocks</h2></div>
 <div class="scroll"><table>${BLOCK_HEAD}<tbody>${blockRows(ctx, recentBlocks(ctx, 15, { id }))}</tbody></table></div></section>`);
-}
-
-export function methodPage(ctx: PageCtx): string {
-  const item = (k: string, v: string): string => `<dt>${k}</dt><dd>${v}</dd>`;
-  return layout(ctx, 'Method: Pearl mining', '/method', `<section class="card prose">
-<div class="head"><h2>Method</h2></div>
-<dl class="facts">
-${item('Source', "Blocks this server's pearld accepted, followed one by one with pearljs's followChain. Reorganised blocks are undone and listed as stale.")}
-${item('Windows', '1D, 1W and 1M are the last 445, 3,118 and 13,361 blocks: a day, a week and 30 days at the 194 s target.')}
-${item('Miner', 'The address paid by the largest coinbase output. labels.json groups addresses under a name, each with its source. Coinbase text is shown but proves nothing.')}
-${item('Share of blocks', 'Blocks found over blocks in the window, with a 95% Clopper-Pearson interval.')}
-${item('Hashrate', "Work over time, as pearld's getnetworkhashps, with a Poisson interval on the block count. Pools quote hashrate in their own units, so compare shares, not hashrates.")}
-${item('Effort', 'Per block: time since the previous block over 194 s. Network: the window\'s time over what its blocks should take. A pool\'s own effort counts shares and cannot be checked on chain.')}
-${item('Claims', 'claims.json holds what pools or stats sites publish: a share, or a hashrate with the network hashrate from the same page. Each is tested against the window with a binomial tail. "Fits" means inside the 95% interval.')}
-${item('Linked', 'Coinbase outputs of two addresses spent in one transaction suggest one owner. Merged only by editing labels.json.')}
-${item('Fees', 'Coinbase reward minus subsidy: what the miner claimed.')}
-</dl>
-</section>`);
 }

@@ -10,7 +10,7 @@ import type { PearlNetwork } from 'pearljs';
 import { WINDOWS, miners, network, recentBlocks, stale, type WindowName } from './analysis.js';
 import type { Store } from './db.js';
 import { loadClaims, loadLabels, type Claim, type Labels } from './labels.js';
-import { blocksPage, methodPage, minerPage, minersPage, overview, type PageCtx } from './views.js';
+import { blocksPage, minerPage, minersPage, overview, type PageCtx } from './views.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -110,7 +110,6 @@ export function createApp(opts: ServeOptions): Server {
         return page(() => blocksPage(ctx, below === null ? null : Number(below)));
       }
       if (url.pathname === '/miners') return page(() => minersPage(ctx, window));
-      if (url.pathname === '/method') return page(() => methodPage(ctx));
       if (url.pathname.startsWith('/miner/')) return page(() => minerPage(ctx, decodeURIComponent(url.pathname.slice(7)), window));
       if (url.pathname === '/api/network.json') return send(200, 'application/json', json(network(ctx, window)));
       if (url.pathname === '/api/miners.json') return send(200, 'application/json', json({ window, blocks: network(ctx, window)?.blocks ?? 0, miners: miners(ctx, window) }));

@@ -69,7 +69,7 @@ export function rankChart(items: RankRow[], width = 760): string {
 }
 
 /** A small line chart; with `band`, the interval is drawn under the line. */
-export function lineChart(points: SeriesPoint[], pick: (p: SeriesPoint) => number, opts: { label: string; unit: (v: number) => string; band?: (p: SeriesPoint) => [number, number]; step?: boolean; width?: number }): string {
+export function lineChart(points: SeriesPoint[], pick: (p: SeriesPoint) => number, opts: { label: string; unit: (v: number) => string; band?: (p: SeriesPoint) => [number, number]; width?: number }): string {
   const width = opts.width ?? 560;
   const height = 150;
   const pad = { l: 64, r: 10, t: 8, b: 22 };
@@ -99,9 +99,7 @@ export function lineChart(points: SeriesPoint[], pick: (p: SeriesPoint) => numbe
   points.forEach((p, i) => {
     const px = f(x(p.time));
     const py = f(y(pick(p)));
-    if (i === 0) d += `M${px} ${py}`;
-    else if (opts.step) d += `H${px}V${py}`;
-    else d += `L${px} ${py}`;
+    d += `${i === 0 ? 'M' : 'L'}${px} ${py}`;
   });
   parts.push(`<path class="line" d="${d}"/>`);
   const day = (t: number): string => new Date(t * 1000).toISOString().slice(5, 10);
@@ -148,25 +146,6 @@ export function sparkline(counts: number[], per: number): string {
   const pts = counts.map((c, i) => `${f((i / Math.max(1, counts.length - 1)) * (w - 4) + 2)},${f(h - 3 - (c / max) * (h - 6))}`).join(' ');
   const title = `Blocks per ${per}: ${counts.join(', ')}`;
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><title>${esc(title)}</title><polyline points="${pts}"/></svg>`;
-}
-
-/** One mark per block: claimed-share effort, with 1 as par. */
-export function effortStrip(points: { height: number; effort: number }[], width = 760): string {
-  const height = 110;
-  const pad = { l: 40, r: 10, t: 8, b: 18 };
-  if (points.length === 0) return '<p class="empty">No blocks between two of this identity\'s blocks in the window.</p>';
-  const cap = 4;
-  const y = (e: number): number => pad.t + (1 - Math.min(e, cap) / cap) * (height - pad.t - pad.b);
-  const bw = (width - pad.l - pad.r) / points.length;
-  const parts: string[] = [];
-  for (const v of [0, 1, 2, 4]) {
-    parts.push(`<line class="${v === 1 ? 'par' : 'grid'}" x1="${pad.l}" x2="${width - pad.r}" y1="${f(y(v))}" y2="${f(y(v))}"/>`);
-    parts.push(`<text class="tick" x="${pad.l - 6}" y="${f(y(v) + 4)}" text-anchor="end">${v * 100}%</text>`);
-  }
-  points.forEach((p, i) => {
-    parts.push(`<rect class="bar${p.effort > 1 ? ' over' : ''}" x="${f(pad.l + i * bw + bw * 0.15)}" y="${f(y(p.effort))}" width="${f(Math.max(1, bw * 0.7))}" height="${f(y(0) - y(p.effort))}"><title>Block ${p.height}: ${f(p.effort * 100)}%</title></rect>`);
-  });
-  return `<svg class="chart strip" viewBox="0 0 ${width} ${height}" role="img" aria-label="Effort per block">${parts.join('')}</svg>`;
 }
 
 /**

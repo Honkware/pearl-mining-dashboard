@@ -88,10 +88,12 @@ Both files live in `DATA_DIR` and are reread when they change.
 
 ## Pages and API
 
-- `/` headline numbers, the top ten miners with share bars and claim checks, hashrate, difficulty and block-time charts, latest blocks. `?window=day|week|month|all` picks the last 445, 3,118 or 13,361 blocks, or all of them.
-- `/miners` every miner, with a ranking chart of shares, intervals and claims.
-- `/miner/<id>` one miner: share by window, the claim check with effort per block, its addresses and coinbase text, and transactions that link it to other addresses.
-- `/blocks`, `/method`.
+- `/` headline numbers, the top ten miners, hashrate and block-time charts, latest blocks. `?window=day|week|month|all` picks the last 445, 3,118 or 13,361 blocks, or all of them.
+- `/miners` every miner, with a ranking chart of shares, their likely ranges and what pools say.
+- `/miner/<id>` one miner: its numbers, what the pool says against what it found in plain words, its addresses and coinbase text, and transactions that link it to other addresses.
+- `/blocks` every block, newest first.
+
+In the miners table, "Pool says" is the share a pool publishes about itself, from `claims.json`. "matches" means the claim is inside the 95% range of what the pool's blocks show; "too high" or "too low" means it is outside, which normal luck produces less than 5 times in 100. Hovering a number shows its range and how it was worked out.
 - `/api/network.json`, `/api/miners.json`, `/api/blocks.json`, `/api/stale.json`.
 
 ## What it can and cannot tell you

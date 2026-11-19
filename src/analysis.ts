@@ -378,19 +378,3 @@ export function shareHistory(ctx: Context, buckets: number, per: number): { per:
   });
   return { per, counts };
 }
-
-/** For an identity with a claim: network blocks between its consecutive blocks, times the claimed share. 1 is par. */
-export function claimEffort(ctx: Context, id: string, share: number, window: WindowName): { height: number; effort: number }[] {
-  const { blocks } = windowBlocks(ctx, window);
-  const out: { height: number; effort: number }[] = [];
-  let since = 0;
-  let started = false;
-  for (const b of blocks) {
-    since += 1;
-    if (identityOf(b.payout_script, ctx.labels) !== id) continue;
-    if (started) out.push({ height: b.height, effort: since * share });
-    started = true;
-    since = 0;
-  }
-  return out;
-}
