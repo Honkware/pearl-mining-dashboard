@@ -1,0 +1,25 @@
+{
+  "name": "pearl-mining-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Who mines Pearl blocks, estimated from the chain, with intervals, and tested against what pools claim",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "index": "node --no-warnings=ExperimentalWarning dist/cli.js index",
+    "serve": "node --no-warnings=ExperimentalWarning dist/cli.js serve",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "pearljs": "file:../pearljs"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  }
+}
