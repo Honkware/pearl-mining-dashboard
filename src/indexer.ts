@@ -30,6 +30,7 @@ export function startIndexer(opts: IndexerOptions): ChainWatch {
   if (savedNetwork !== null && savedNetwork !== network.name) throw new Error(`store holds ${savedNetwork} blocks, not ${network.name}`);
   if (savedNetwork === null) store.setMeta('network', network.name);
   const from = saved !== null ? { cursor: saved } : { height: opts.startHeight ?? 0 };
+  let forksCheckedAt = 0;
   log(`[index] start ${saved !== null ? `after ${saved.height} ${saved.hash.slice(0, 16)}` : `at ${from.height}`}`);
 
   return watchChain(rpc, {
@@ -54,7 +55,17 @@ export function startIndexer(opts: IndexerOptions): ChainWatch {
         });
         log(`[index] disconnected ${event.height} ${event.hash}`);
       } else {
-        await noteForks(opts, now());
+        // Side branches are a nice-to-have: checked at most once a minute (catching
+        // up sends a synced event per block), and a slow or failed reply is skipped,
+        // never allowed to stop the indexer.
+        if (now() - forksCheckedAt >= 60) {
+          forksCheckedAt = now();
+          try {
+            await noteForks(opts, now());
+          } catch (err) {
+            log(`[index] getchaintips skipped: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
         log(`[index] synced at ${event.height}`);
       }
       opts.onEvent?.(event);

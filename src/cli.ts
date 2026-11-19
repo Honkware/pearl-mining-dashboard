@@ -63,9 +63,13 @@ async function main(): Promise<void> {
     const stop = (): void => watch.stop();
     process.on('SIGINT', stop);
     process.on('SIGTERM', stop);
-    await watch.done;
-    await ws.close();
-    store.close();
+    try {
+      await watch.done;
+    } finally {
+      // An open websocket would keep a failed indexer's process alive, looking healthy.
+      await ws.close();
+      store.close();
+    }
     log('[index] stopped');
     return;
   }
