@@ -2,7 +2,7 @@
 // unless labels.json names several scripts as one party. Labels are written
 // by hand, each with its source; nothing here guesses who owns an address.
 import { readFileSync } from 'node:fs';
-import { fromOutputScript, toOutputScript, type PearlNetwork } from 'pearljs';
+import { fromOutputScript, toOutputScript, verifyMessage, type PearlNetwork } from 'pearljs';
 
 export interface LabelEntry {
   label: string;
@@ -114,5 +114,61 @@ export function identityName(id: string, network: PearlNetwork): string {
     return fromOutputScript(Buffer.from(hex, 'hex'), network);
   } catch {
     return hex;
+  }
+}
+
+/**
+ * The exact text a pool signs with an address to prove the address is its
+ * own. The signature is checked against the address, and the text names the
+ * pool, so it cannot be moved to another address or another pool. Oyster
+ * signs at most 80 bytes, which leaves 68 for the name.
+ */
+export function proofMessage(pool: string): string {
+  const text = `Pearl pool: ${pool}`;
+  if (Buffer.byteLength(text) > 80) throw new Error(`pool name too long to sign: ${pool}`);
+  return text;
+}
+
+export interface SignedName {
+  pool: string;
+  address: string;
+  /** Base64, from Oyster's signmessage or pearljs's signMessage. */
+  signature: string;
+}
+
+/**
+ * Names from signed-names.json whose signature verifies with pearljs over
+ * proofMessage; the rest come back as rejected, so the caller can say so.
+ */
+export function parseSignedNames(raw: string, network: PearlNetwork): { labels: Labels; rejected: SignedName[] } {
+  const doc = JSON.parse(raw) as { names?: SignedName[] };
+  const labels = emptyLabels();
+  const rejected: SignedName[] = [];
+  for (const n of doc.names ?? []) {
+    let ok = false;
+    try {
+      ok = verifyMessage(n.address, n.signature, proofMessage(n.pool), network);
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      rejected.push(n);
+      continue;
+    }
+    const script = Buffer.from(toOutputScript(n.address, network)).toString('hex');
+    if (labels.byScript.has(script)) continue;
+    const entry = { label: n.pool, scripts: [script], source: 'signed by the address' };
+    labels.entries.push(entry);
+    labels.byScript.set(script, entry);
+  }
+  return { labels, rejected };
+}
+
+export function loadSignedNames(path: string, network: PearlNetwork): { labels: Labels; rejected: SignedName[] } {
+  try {
+    return parseSignedNames(readFileSync(path, 'utf8'), network);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { labels: emptyLabels(), rejected: [] };
+    throw err;
   }
 }

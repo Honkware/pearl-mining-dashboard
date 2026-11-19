@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import type { PearlNetwork } from 'pearljs';
 import { WINDOWS, miners, network, recentBlocks, stale, type WindowName } from './analysis.js';
 import type { Store } from './db.js';
-import { loadClaims, loadLabels, mergeLabels, type Claim, type Labels } from './labels.js';
+import { loadClaims, loadLabels, loadSignedNames, mergeLabels, type Claim, type Labels } from './labels.js';
 import { blocksPage, minerPage, minersPage, overview, type PageCtx } from './views.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -62,7 +62,13 @@ export function createApp(opts: ServeOptions): Server {
   const poolLabels = watched<Labels>(file('pool-labels.json'), () => loadLabels(file('pool-labels.json'), opts.network));
   const handClaims = watched<Claim[]>(file('claims.json'), () => loadClaims(file('claims.json')));
   const poolClaims = watched<Claim[]>(file('pool-claims.json'), () => loadClaims(file('pool-claims.json')));
-  const labels = (): Labels => mergeLabels(handLabels(), poolLabels());
+  const signedNames = watched<Labels>(file('signed-names.json'), () => {
+    const { labels: l, rejected } = loadSignedNames(file('signed-names.json'), opts.network);
+    for (const r of rejected) opts.log?.(`[serve] signed-names.json: signature does not verify for ${r.pool} ${r.address}`);
+    return l;
+  });
+  // Your own labels first, then names proven by signature, then what pools and trackers publish.
+  const labels = (): Labels => mergeLabels(handLabels(), signedNames(), poolLabels());
   const claims = (): Claim[] => [...handClaims(), ...poolClaims()];
   const now = opts.now ?? (() => Math.floor(Date.now() / 1000));
   const cache = new Map<string, string>();

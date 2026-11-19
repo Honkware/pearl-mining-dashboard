@@ -23,6 +23,13 @@ async function main(): Promise<void> {
     await serve({ store, network: demoNetwork, dataDir: dir, port: Number(process.env.PORT ?? 8080), host: '127.0.0.1', now: () => chain.time + 60, log });
     return;
   }
+  if (cmd === 'proof-message') {
+    const { proofMessage } = await import('./labels.js');
+    const pool = process.argv.slice(3).join(' ');
+    if (pool === '') throw new Error('usage: cli.js proof-message <pool name>');
+    console.log(proofMessage(pool));
+    return;
+  }
   if (cmd === 'pools') {
     const { networks } = await import('pearljs');
     const { collectPools, writePools } = await import('./pools.js');
@@ -68,7 +75,7 @@ async function main(): Promise<void> {
     await serve({ store, network, dataDir, port: Number(process.env.PORT ?? 8080), host: process.env.HOST ?? '127.0.0.1', nodeHeight: () => client.getBlockCount(), log });
     return;
   }
-  console.error('usage: cli.js index | serve | pools | demo');
+  console.error('usage: cli.js index | serve | pools | proof-message | demo');
   process.exitCode = 2;
 }
 
