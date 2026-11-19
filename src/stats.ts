@@ -120,8 +120,24 @@ export interface Interval {
   hi: number;
 }
 
+// Long windows hold hundreds of miners with the same few block counts, and
+// each interval takes a few hundred incomplete-beta evaluations; computed once each.
+const memo = new Map<string, Interval>();
+function remember(key: string, make: () => Interval): Interval {
+  let v = memo.get(key);
+  if (v === undefined) {
+    if (memo.size > 50_000) memo.clear();
+    memo.set(key, (v = make()));
+  }
+  return v;
+}
+
 /** Clopper-Pearson interval for a binomial proportion: k successes in n trials. */
 export function shareInterval(k: number, n: number, level = 0.95): Interval {
+  return remember(`s${k},${n},${level}`, () => clopperPearson(k, n, level));
+}
+
+function clopperPearson(k: number, n: number, level: number): Interval {
   if (n === 0) return { lo: 0, hi: 1 };
   const alpha = 1 - level;
   return {
@@ -132,6 +148,10 @@ export function shareInterval(k: number, n: number, level = 0.95): Interval {
 
 /** Garwood interval for a Poisson mean given k events. */
 export function countInterval(k: number, level = 0.95): Interval {
+  return remember(`c${k},${level}`, () => garwood(k, level));
+}
+
+function garwood(k: number, level: number): Interval {
   const alpha = 1 - level;
   return {
     lo: k === 0 ? 0 : gammaQuantile(alpha / 2, k),

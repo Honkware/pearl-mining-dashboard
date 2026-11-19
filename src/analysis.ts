@@ -23,8 +23,9 @@ interface BlockRow {
   cert_kind: string | null;
   tx_count: number;
   vsize: number;
-  reward: bigint;
-  subsidy: bigint;
+  /** Grain. One block's reward is far below 2^53, so a number holds it exactly; sums are taken as bigint. */
+  reward: number;
+  subsidy: number;
   tag: string | null;
   payout_script: string;
   payout_count: number;
@@ -87,15 +88,10 @@ export interface ClaimTest {
   atLeast: number;
 }
 
+// Rows come back as plain numbers: copying each into a new object was most
+// of a page's time on a long window.
 function rows(ctx: Context, sql: string, ...params: (number | string)[]): BlockRow[] {
-  const stmt = ctx.store.db.prepare(sql);
-  stmt.setReadBigInts(true);
-  // Amounts in grain stay exact as bigint; every other integer column fits a number.
-  return stmt.all(...params).map((r) => {
-    const row: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(r)) row[k] = typeof v === 'bigint' && k !== 'reward' && k !== 'subsidy' ? Number(v) : v;
-    return row as unknown as BlockRow;
-  });
+  return ctx.store.db.prepare(sql).all(...params) as unknown as BlockRow[];
 }
 
 const COLUMNS = 'height, hash, time, bits, difficulty, work, cert_version, cert_kind, tx_count, vsize, reward, subsidy, tag, payout_script, payout_count';
@@ -106,7 +102,25 @@ export function tipTime(ctx: Context): number | null {
 }
 
 /** The window's blocks, plus the one before it, whose timestamp starts the span. */
+// A page asks for the same window several times (figures, miners, chart, block
+// times); it is read from SQLite once per window and tip, and kept for the
+// next request until a new block arrives.
+const windowCache = new WeakMap<Store, Map<string, { before: BlockRow | null; blocks: BlockRow[] }>>();
+
 function windowBlocks(ctx: Context, window: WindowName): { before: BlockRow | null; blocks: BlockRow[] } {
+  const tip = ctx.store.db.prepare('SELECT hash FROM blocks ORDER BY height DESC LIMIT 1').get() as { hash: string } | undefined;
+  const key = `${tip?.hash ?? ''}|${window}`;
+  let byKey = windowCache.get(ctx.store);
+  if (byKey === undefined) windowCache.set(ctx.store, (byKey = new Map()));
+  const hit = byKey.get(key);
+  if (hit !== undefined) return hit;
+  for (const k of byKey.keys()) if (!k.startsWith(`${tip?.hash ?? ''}|`)) byKey.delete(k);
+  const loaded = loadWindow(ctx, window);
+  byKey.set(key, loaded);
+  return loaded;
+}
+
+function loadWindow(ctx: Context, window: WindowName): { before: BlockRow | null; blocks: BlockRow[] } {
   const size = WINDOWS[window];
   const all = size === Infinity
     ? rows(ctx, `SELECT ${COLUMNS} FROM blocks ORDER BY height`)
@@ -138,8 +152,8 @@ export function network(ctx: Context, window: WindowName): Network | null {
     difficulty: last.difficulty,
     difficultyChange: last.difficulty / before.difficulty - 1,
     emptyBlocks: blocks.filter((b) => b.tx_count === 1).length,
-    reward: blocks.reduce((s, b) => s + b.reward, 0n),
-    feesClaimed: blocks.reduce((s, b) => s + (b.reward > b.subsidy ? b.reward - b.subsidy : 0n), 0n),
+    reward: blocks.reduce((s, b) => s + BigInt(b.reward), 0n),
+    feesClaimed: blocks.reduce((s, b) => s + (b.reward > b.subsidy ? BigInt(b.reward - b.subsidy) : 0n), 0n),
     identities: ids.size,
   };
 }
@@ -159,7 +173,8 @@ export function miners(ctx: Context, window: WindowName): MinerRow[] {
   const tip = blocks[blocks.length - 1]!.time;
   // Payout scripts whose coinbases were spent into ten or more outputs.
   const payers = new Set(
-    (ctx.store.db.prepare('SELECT DISTINCT p.script AS script FROM spends s JOIN payouts p ON p.txid = s.cb_txid AND p.vout = s.cb_vout WHERE s.outputs >= 10').all() as { script: string }[]).map((r) => r.script),
+    // CROSS JOIN keeps SQLite starting from the few wide spends instead of every coinbase output.
+    (ctx.store.db.prepare('SELECT DISTINCT p.script AS script FROM spends s CROSS JOIN payouts p ON p.txid = s.cb_txid AND p.vout = s.cb_vout WHERE s.outputs >= 10').all() as { script: string }[]).map((r) => r.script),
   );
   const groups = new Map<string, { blocks: BlockRow[]; scripts: Set<string> }>();
   for (const b of blocks) {
@@ -240,6 +255,13 @@ export interface RecentBlock {
   payoutCount: number;
 }
 
+/** The payout scripts an identity covers: those under its label, or its one script. */
+function scriptsOf(ctx: Context, id: string): string[] {
+  return id.startsWith('label:')
+    ? [...ctx.labels.byScript].filter(([, e]) => e.label === id.slice(6)).map(([script]) => script)
+    : [id.slice(7)];
+}
+
 /** Newest first. `id` keeps one identity's blocks; `below` pages down from a height. */
 export function recentBlocks(ctx: Context, limit: number, opts: { id?: string; below?: number } = {}): RecentBlock[] {
   const where: string[] = [];
@@ -249,9 +271,7 @@ export function recentBlocks(ctx: Context, limit: number, opts: { id?: string; b
     params.push(opts.below);
   }
   if (opts.id !== undefined) {
-    const scripts = opts.id.startsWith('label:')
-      ? [...ctx.labels.byScript].filter(([, e]) => e.label === opts.id!.slice(6)).map(([script]) => script)
-      : [opts.id.slice(7)];
+    const scripts = scriptsOf(ctx, opts.id);
     if (scripts.length === 0) return [];
     where.push(`payout_script IN (${scripts.map(() => '?').join(', ')})`);
     params.push(...scripts);
@@ -268,7 +288,7 @@ export function recentBlocks(ctx: Context, limit: number, opts: { id?: string; b
       interval: prevTime === null ? null : b.time - prevTime,
       id,
       name: identityName(id, ctx.network),
-      reward: b.reward,
+      reward: BigInt(b.reward),
       txCount: b.tx_count,
       vsize: b.vsize,
       certVersion: b.cert_version,
@@ -315,13 +335,17 @@ export interface Links {
 }
 
 export function links(ctx: Context, id: string, fanOutAt = 10): Links {
+  const scripts = scriptsOf(ctx, id);
+  if (scripts.length === 0) return { coSpent: [], fanOut: [] };
+  // Transactions that spend this miner's coinbases, with every coinbase each of them spends.
   const spends = ctx.store.db
     .prepare(
-      `SELECT s.txid, s.height, s.outputs, p.script FROM spends s JOIN payouts p ON p.txid = s.cb_txid AND p.vout = s.cb_vout
-       WHERE s.txid IN (SELECT s2.txid FROM spends s2 JOIN payouts p2 ON p2.txid = s2.cb_txid AND p2.vout = s2.cb_vout)
+      `SELECT s.txid, s.height, s.outputs, p.script FROM spends s CROSS JOIN payouts p ON p.txid = s.cb_txid AND p.vout = s.cb_vout
+       WHERE s.txid IN (SELECT s2.txid FROM payouts p2 CROSS JOIN spends s2 ON s2.cb_txid = p2.txid AND s2.cb_vout = p2.vout
+                        WHERE p2.script IN (${scripts.map(() => '?').join(', ')}))
        ORDER BY s.height DESC`,
     )
-    .all() as { txid: string; height: number; outputs: number; script: string }[];
+    .all(...scripts) as { txid: string; height: number; outputs: number; script: string }[];
   const byTx = new Map<string, { height: number; outputs: number; ids: Set<string> }>();
   for (const s of spends) {
     const t = byTx.get(s.txid) ?? { height: s.height, outputs: s.outputs, ids: new Set() };

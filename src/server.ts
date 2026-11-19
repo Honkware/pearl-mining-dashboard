@@ -73,8 +73,27 @@ export function createApp(opts: ServeOptions): Server {
   const now = opts.now ?? (() => Math.floor(Date.now() / 1000));
   const cache = new Map<string, string>();
   let cacheTip = '';
+  let cacheAt = 0;
   let nodeHeight: number | null = null;
   let nodeCheckedAt = 0;
+
+  // Labels and claims can change without a new block; their state is part of the key.
+  const cacheKey = (path: string, ctx: PageCtx): string =>
+    `${path}|${ctx.labels.byScript.size}|${ctx.labels.entries.length}|${ctx.claims.map((c) => c.readAt).join(',')}`;
+
+  // Renders the overview for every window after new blocks, one per turn of the
+  // event loop, so switching windows finds the page ready; "all" alone takes seconds.
+  const warm = (ctx: PageCtx): void => {
+    const tip = cacheTip;
+    const paths = (Object.keys(WINDOWS) as WindowName[]).map((w) => [`/?window=${w}`, w] as const);
+    const next = (i: number): void => {
+      if (i >= paths.length || cacheTip !== tip) return;
+      const [path, w] = paths[i]!;
+      if (!cache.has(cacheKey(path, ctx))) cache.set(cacheKey(path, ctx), overview(ctx, w));
+      setImmediate(() => next(i + 1));
+    };
+    setImmediate(() => next(0));
+  };
 
   return createServer((req, res) => {
     void (async () => {
@@ -92,10 +111,14 @@ export function createApp(opts: ServeOptions): Server {
       }
       const ctx: PageCtx = { store: opts.store, network: opts.network, labels: labels(), claims: claims(), now: now(), nodeHeight };
       const tip = recentBlocks(ctx, 1)[0]?.hash ?? '';
-      const key = `${tip}|${url.pathname}${url.search}`;
-      if (tip !== cacheTip) {
+      const key = `${url.pathname}${url.search}`;
+      // A new block clears the pages, but no more than every 15 s: while the
+      // indexer catches up, blocks arrive many times a second.
+      if (tip !== cacheTip && now() - cacheAt >= 15) {
         cache.clear();
         cacheTip = tip;
+        cacheAt = now();
+        warm(ctx);
       }
       const w = url.searchParams.get('window') ?? 'week';
       const window: WindowName = w in WINDOWS ? (w as WindowName) : 'week';
@@ -104,8 +127,7 @@ export function createApp(opts: ServeOptions): Server {
         res.end(body);
       };
       const page = (make: () => string | null): void => {
-        // Labels and claims can change without a new block; their state is part of the key.
-        const k = `${key}|${ctx.labels.byScript.size}|${ctx.labels.entries.length}|${ctx.claims.map((c) => c.readAt).join(',')}`;
+        const k = cacheKey(key, ctx);
         let html = cache.get(k) ?? null;
         if (html === null) {
           html = make();
