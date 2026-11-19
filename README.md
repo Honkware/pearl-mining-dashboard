@@ -1,8 +1,14 @@
 # pearl-mining-dashboard
 
+Made with [pearljs](#made-with-pearljs).
+
 Who mines Pearl blocks, read from a pearld node: each payout address's share of blocks with a 95% interval, an estimated hashrate in pearld's units, network hashrate, difficulty, block times and effort, and a check of what pools claim against the blocks they actually found.
 
 It is a TypeScript server built on `pearljs`, the TypeScript SDK for Pearl in the sibling folder. The indexer follows the node's best chain, wakes on pearld's block notifications, checks each block with pearljs, survives reorganisations and restarts, and keeps one row per block in SQLite. The web server renders the pages from that database, with a small JSON API. The `pools` command names pools from what they publish about themselves and reads their hashrate claims.
+
+## Made with pearljs
+
+This dashboard is the first application built on pearljs, a TypeScript SDK for Pearl, and it is meant to show what pearljs makes possible: following the chain through reorganisations, reading every block and its certificate, checking blocks, verifying signed messages, and testing all of it against a simulated chain without a node. The table below shows which part of pearljs does what here. Set `PEARLJS_URL` to make the "Made with pearljs" footer a link.
 
 ## How pearljs is used
 
@@ -45,7 +51,7 @@ Node 22.13 or newer is needed for `node:sqlite`. `pearljs` comes from the siblin
 
 ### 1. pearld
 
-Build pearld from the Pearl source as `.work/regtest/scripts/build.sh` does (`go build -tags xmss,zkpow -o pearld ./node` after building the zk-pow Rust bindings), or use a release binary. Give it a limited RPC user in `pearld.conf` in its home directory, so the passwords stay off the command line:
+Use a pearld release binary, or build it from Pearl's source (github.com/pearl-research-labs/pearl), which needs its zk-pow Rust bindings built first; its Taskfile has the steps. Give it a limited RPC user in `pearld.conf` in its home directory, so the passwords stay off the command line:
 
 ```
 rpcuser=admin
@@ -154,10 +160,10 @@ What it cannot answer: a pool's own share-based hashrate and effort, which addre
 npm test
 ```
 
-27 tests run against `pearljs/testing`'s simulated chain: the statistics against values from scipy, the indexer through reorganisations while running and while stopped, pearljs's block checks, coinbase co-spends, pool naming from feeds, trackers and spending, coinbase tags taken from mainnet blocks, signed names, claims, and the pages. One more runs against a real regtest pearld fed saved blocks:
+27 tests run against `pearljs/testing`'s simulated chain: the statistics against values from scipy, the indexer through reorganisations while running and while stopped, pearljs's block checks, coinbase co-spends, pool naming from feeds, trackers and spending, coinbase tags taken from mainnet blocks, signed names, claims, and the pages. One more runs against a real regtest pearld fed saved blocks (a JSON array of block hex, as `getblock <hash> 0` returns it):
 
 ```bash
-PEARLD=../.work/regtest/bin/pearld PEARL_CHAIN=../.work/regtest/chain/setup-blocks.json npx vitest run --config vitest.live.config.ts
+PEARLD=/path/to/pearld PEARL_CHAIN=/path/to/saved-blocks.json npx vitest run --config vitest.live.config.ts
 ```
 
 ## Limits
