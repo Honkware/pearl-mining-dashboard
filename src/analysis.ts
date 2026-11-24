@@ -4,7 +4,7 @@
 // with its own clock gives the same answers as a current one. The sizes are
 // a day, a week and 30 days of 194-second blocks.
 import type { PearlNetwork } from 'pearljs';
-import type { Store } from './db.js';
+import { INPUTS_COMPLETE, type Store } from './db.js';
 import { claimedShare, identityName, identityOf, type Claim, type Labels } from './labels.js';
 import { cleanTag, DEFAULT_TAG } from './facts.js';
 import { binomialAtLeast, binomialAtMost, countInterval, shareInterval, type Interval } from './stats.js';
@@ -449,10 +449,19 @@ export interface PayoutAudit {
   /** Transactions that spent its coinbases. */
   txs: number;
   /**
-   * Distinct outside addresses those transactions paid. Not an amount: the same
-   * transactions also spend the pool's change, so their outputs exceed its rewards.
+   * Distinct outside addresses those transactions paid. An address is the
+   * identity's own, and left out, when one of these transactions later spends
+   * what it was sent: that is change coming back.
    */
   payees: number;
+  /**
+   * What those addresses were paid, in grain. Null until the store has every
+   * payout transaction's inputs (`backfill`), since without them change counts
+   * as a payment. Also null for an identity that moves more to its own addresses
+   * and out of sight than it pays to others: one that pays its miners from a
+   * wallet, in transactions that spend none of its coinbases, cannot be followed.
+   */
+  sentOut: bigint | null;
   lastSpend: { height: number; time: number } | null;
 }
 
@@ -491,12 +500,29 @@ function computeAudit(ctx: Context, id: string): PayoutAudit | null {
   sums.setReadBigInts(true);
   const t = sums.get(tip - maturity + 1, tip - maturity + 1, ...scripts) as { earned: bigint; spent: bigint; mature: bigint; immature: bigint };
   const spendTxs = `SELECT DISTINCT s.txid FROM payouts p CROSS JOIN spends s ON s.cb_txid = p.txid AND s.cb_vout = p.vout WHERE p.script IN (${marks})`;
+  // Scripts the identity paid and then spent from in a later one of these transactions: its change addresses.
+  const change = `SELECT DISTINCT c.script FROM spend_inputs i JOIN spend_outputs c ON c.txid = i.prev_txid AND c.vout = i.prev_vout
+     WHERE i.txid IN (${spendTxs}) AND c.txid IN (${spendTxs})`;
   const out = db.prepare(
-    `SELECT COUNT(DISTINCT o.script) AS payees FROM spend_outputs o
-     WHERE o.txid IN (${spendTxs}) AND o.script NOT IN (${marks})`,
+    `SELECT COUNT(DISTINCT o.script) AS payees, COALESCE(SUM(o.value), 0) AS sent FROM spend_outputs o
+     WHERE o.txid IN (${spendTxs}) AND o.script NOT IN (${marks}) AND o.script NOT IN (${change})`,
   );
   out.setReadBigInts(true);
-  const o = out.get(...scripts, ...scripts) as { payees: bigint };
+  const o = out.get(...scripts, ...scripts, ...scripts, ...scripts) as { payees: bigint; sent: bigint };
+  // What these transactions sent to the identity's own scripts, and how much of that they later spent again.
+  const keptQ = db.prepare(
+    `SELECT COALESCE(SUM(o.value), 0) AS kept FROM spend_outputs o
+     WHERE o.txid IN (${spendTxs}) AND (o.script IN (${marks}) OR o.script IN (${change}))`,
+  );
+  keptQ.setReadBigInts(true);
+  const kept = (keptQ.get(...scripts, ...scripts, ...scripts, ...scripts) as { kept: bigint }).kept;
+  const againQ = db.prepare(
+    `SELECT COALESCE(SUM(c.value), 0) AS again FROM spend_inputs i JOIN spend_outputs c ON c.txid = i.prev_txid AND c.vout = i.prev_vout
+     WHERE i.txid IN (${spendTxs}) AND c.txid IN (${spendTxs})`,
+  );
+  againQ.setReadBigInts(true);
+  const again = (againQ.get(...scripts, ...scripts) as { again: bigint }).again;
+  const followed = ctx.store.getMeta(INPUTS_COMPLETE) !== null && kept - again <= o.sent;
   const last = db
     .prepare(`SELECT MAX(s.height) AS height FROM (${spendTxs}) x JOIN spends s ON s.txid = x.txid`)
     .get(...scripts) as { height: number | null };
@@ -509,6 +535,7 @@ function computeAudit(ctx: Context, id: string): PayoutAudit | null {
     heldImmature: t.immature,
     txs,
     payees: Number(o.payees),
+    sentOut: followed ? o.sent : null,
     lastSpend: last.height === null || lastTime === null ? null : { height: last.height, time: lastTime },
   };
 }

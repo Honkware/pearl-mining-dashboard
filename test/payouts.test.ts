@@ -49,6 +49,7 @@ test('a pool whose coinbase was paid out to two miners shows it spent, with two 
   expect(audit.txs).toBe(1);
   // Two miners; the change back to the pool's own address does not count.
   expect(audit.payees).toBe(2);
+  expect(audit.sentOut).toBe(value / 2n + value / 4n);
 
   const got = receivedFromPools(ctx, hex(testAddress(40, net)));
   expect(got.map((r) => [r.value, r.from])).toEqual([[value / 2n, [`script:${hex(pool)}`]]]);
@@ -57,6 +58,60 @@ test('a pool whose coinbase was paid out to two miners shows it spent, with two 
   const html = addressPage({ ...ctx, now: chain.time }, testAddress(40, net))!;
   expect(html).toContain('Payments from pools');
   expect(addressPage({ ...ctx, now: chain.time }, 'not an address')).toBeNull();
+  store.close();
+});
+
+test('change sent to a fresh address and spent in the next payout is not counted as paid out', async () => {
+  const chain = new SimulatedChain({ network: net, premine: 3 });
+  const account = testAccount(1, net);
+  const pool = account.deriveAddress(0);
+  const fresh = account.deriveAddress(1);
+  const [first] = chain.mine(1, { coinbaseTo: pool });
+  const [second] = chain.mine(1, { coinbaseTo: pool });
+  chain.mine(3);
+  const cb1 = chain.block(first!.hash)!.txs[0]!;
+  const cb2 = chain.block(second!.hash)!.txs[0]!;
+  const v1 = cb1.outs[0]!.value;
+  const v2 = cb2.outs[0]!.value;
+  const coin = (tx: typeof cb1, index: number, script: string, value: bigint, coinbase: boolean) =>
+    ({ txid: tx.getId(), vout: tx.outs.findIndex((o) => Buffer.from(o.script).toString('hex') === script), index, value, script: Buffer.from(script, 'hex'), confirmations: 5, coinbase });
+  const pay1 = payFromAccount(account, {
+    network: net,
+    utxos: [coin(cb1, 0, hex(pool), v1, true)],
+    recipients: [{ address: testAddress(50, net), amount: v1 / 4n }],
+    changeAddress: fresh,
+    feeRate: 2000n,
+    coinbaseMaturity: net.coinbaseMaturity,
+  });
+  chain.accept(pay1.transaction);
+  chain.mine(1);
+  const change = pay1.transaction.outs.find((o) => Buffer.from(o.script).toString('hex') === hex(fresh))!.value;
+  const pay2 = payFromAccount(account, {
+    network: net,
+    utxos: [coin(cb2, 0, hex(pool), v2, true), coin(pay1.transaction, 1, hex(fresh), change, false)],
+    recipients: [{ address: testAddress(51, net), amount: v2 + change / 2n }],
+    changeAddress: pool,
+    feeRate: 2000n,
+    coinbaseMaturity: net.coinbaseMaturity,
+  });
+  expect(pay2.transaction.ins.length).toBe(2);
+  chain.accept(pay2.transaction);
+  chain.mine(1);
+  const dir = mkdtempSync(join(tmpdir(), 'pmd-change-'));
+  dirs.push(dir);
+  const store = new Store(join(dir, 'x.sqlite'));
+  await startIndexer({ store, rpc: chain.rpc, network: net, stopAtTip: true }).done;
+  const ctx: Context = { store, network: net, labels: emptyLabels(), claims: [] };
+
+  const audit = payoutAudit(ctx, `script:${hex(pool)}`)!;
+  expect(audit.txs).toBe(2);
+  // The fresh address got the first payout's change and the second payout spent it: the pool's own.
+  expect(audit.payees).toBe(2);
+  expect(audit.sentOut).toBe(v1 / 4n + v2 + change / 2n);
+
+  // A store whose payout transactions' inputs were never recorded shows no amount.
+  store.db.exec("DELETE FROM meta WHERE key = 'spend_inputs_complete'");
+  expect(payoutAudit(ctx, `script:${hex(fresh)}`)!.sentOut).toBeNull();
   store.close();
 });
 

@@ -62,6 +62,15 @@ CREATE TABLE IF NOT EXISTS spend_outputs (
 );
 CREATE INDEX IF NOT EXISTS spend_outputs_height ON spend_outputs (height);
 CREATE INDEX IF NOT EXISTS spend_outputs_script ON spend_outputs (script);
+CREATE TABLE IF NOT EXISTS spend_inputs (
+  height INTEGER NOT NULL,
+  txid TEXT NOT NULL,
+  prev_txid TEXT NOT NULL,
+  prev_vout INTEGER NOT NULL,
+  PRIMARY KEY (txid, prev_txid, prev_vout)
+);
+CREATE INDEX IF NOT EXISTS spend_inputs_height ON spend_inputs (height);
+CREATE INDEX IF NOT EXISTS spend_inputs_prev ON spend_inputs (prev_txid, prev_vout);
 CREATE TABLE IF NOT EXISTS stale (
   hash TEXT PRIMARY KEY,
   height INTEGER NOT NULL,
@@ -73,6 +82,9 @@ CREATE TABLE IF NOT EXISTS stale (
 );
 `;
 
+/** Meta key set once spend_inputs covers every coinbase-spending transaction in the store. */
+export const INPUTS_COMPLETE = 'spend_inputs_complete';
+
 export class Store {
   readonly db: DatabaseSync;
 
@@ -80,7 +92,10 @@ export class Store {
     this.db = new DatabaseSync(path);
     // The indexer writes while the web server reads the same file; wait for a lock instead of failing.
     this.db.exec('PRAGMA busy_timeout = 10000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = OFF;');
+    const fresh = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'blocks'").get() === undefined;
     this.db.exec(SCHEMA);
+    // A store that starts empty records every payout transaction's inputs; an older one needs `backfill` first.
+    if (fresh) this.setMeta(INPUTS_COMPLETE, '1');
     // Columns added after the first stores were made; older rows hold NULL, meaning unknown.
     this.addColumn('check_failed', 'TEXT');
     this.addColumn('mempool_waiting', 'INTEGER');
@@ -103,6 +118,17 @@ export class Store {
   addSpendOutputs(height: number, spends: CoinbaseSpend[]): void {
     const out = this.db.prepare('INSERT OR IGNORE INTO spend_outputs (height, txid, vout, value, script) VALUES (?, ?, ?, ?, ?)');
     for (const s of spends) for (const o of s.outs) out.run(height, s.txid, o.vout, o.value, o.script);
+  }
+
+  /** The inputs of a coinbase-spending transaction that are not coinbase outputs; safe to repeat. */
+  addSpendInputs(height: number, spends: CoinbaseSpend[]): void {
+    const ins = this.db.prepare('INSERT OR IGNORE INTO spend_inputs (height, txid, prev_txid, prev_vout) VALUES (?, ?, ?, ?)');
+    for (const s of spends) {
+      for (const outpoint of s.others) {
+        const [txid, vout] = outpoint.split(':');
+        ins.run(height, s.txid, txid!, Number(vout));
+      }
+    }
   }
 
   /** The mempool seen just before a block arrived, for the empty-block check. */
@@ -171,6 +197,7 @@ export class Store {
       }
     }
     this.addSpendOutputs(f.height, spends);
+    this.addSpendInputs(f.height, spends);
   }
 
   /** Undoes the newest block, keeping a record of it as stale. */
@@ -186,6 +213,7 @@ export class Store {
       .run(hash, height, row.time, row.payout_script, row.reward, 'reorg', seenAt);
     this.db.prepare('DELETE FROM spends WHERE height = ?').run(height);
     this.db.prepare('DELETE FROM spend_outputs WHERE height = ?').run(height);
+    this.db.prepare('DELETE FROM spend_inputs WHERE height = ?').run(height);
     this.db.prepare('DELETE FROM payouts WHERE height = ?').run(height);
     this.db.prepare('DELETE FROM blocks WHERE height = ?').run(height);
   }

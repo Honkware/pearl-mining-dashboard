@@ -368,7 +368,7 @@ ${tile('Per day, 14 days', sparkline(hist, WINDOWS.day), '')}
 ${tile('Rewards earned', `${prl(audit.earned, 0)} PRL`, '')}
 ${tile('Spent', audit.earned === 0n ? '0%' : pct(Number(audit.spent) / Number(audit.earned), 0), `${int(audit.txs)} transactions`)}
 ${tile('Held', `${prl(audit.heldMature, 0)} PRL`, audit.heldImmature > 0n ? `${prl(audit.heldImmature, 0)} PRL still maturing` : 'mature, unspent')}
-${tile('Paid to', `${int(audit.payees)} addresses`, '')}
+${tile('Paid to', `${int(audit.payees)} addresses`, audit.sentOut === null ? '' : `${prl(audit.sentOut, 0)} PRL`)}
 ${tile('Last spend', audit.lastSpend === null ? 'never' : int(audit.lastSpend.height), audit.lastSpend === null ? '' : `${ago(ctx.now - audit.lastSpend.time)} ago`)}
 </div>
 </section>`;

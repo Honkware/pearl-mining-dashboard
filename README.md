@@ -98,13 +98,13 @@ It listens on 127.0.0.1:8080 (`HOST`, `PORT`) and shows a banner while the index
 
 ### Older payouts
 
-The indexer records what each coinbase-spending transaction paid as it goes. A store made before that was added fills it in for past blocks with:
+The indexer records what each coinbase-spending transaction paid, and its other inputs, as it goes. The inputs are how a pool's change is told from a payment: an address a pool paid and later spent from, in another of its payout transactions, is the pool's own. A store made before either was recorded fills it in for past blocks with:
 
 ```bash
 node --no-warnings=ExperimentalWarning dist/cli.js backfill
 ```
 
-It reads only the blocks that hold such transactions, and can be stopped and run again. Whether a block left transactions waiting is only known for blocks seen live.
+It reads only the blocks that hold such transactions, and can be stopped and run again. Until it has finished, pool pages show how many addresses a pool paid but not how much. Whether a block left transactions waiting is only known for blocks seen live.
 
 ### Pool names and claims
 
