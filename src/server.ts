@@ -16,7 +16,7 @@ import { isValidAddress } from 'pearljs';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
 const font = (pkg: string, file: string): string => join(dirname(require.resolve(`${pkg}/package.json`)), 'files', file);
-const STATIC: Record<string, { path: string; type: string }> = {
+export const STATIC: Record<string, { path: string; type: string }> = {
   '/static/app.css': { path: join(root, 'static', 'app.css'), type: 'text/css; charset=utf-8' },
   '/fonts/next-400.woff2': { path: font('@fontsource/atkinson-hyperlegible-next', 'atkinson-hyperlegible-next-latin-400-normal.woff2'), type: 'font/woff2' },
   '/fonts/next-600.woff2': { path: font('@fontsource/atkinson-hyperlegible-next', 'atkinson-hyperlegible-next-latin-600-normal.woff2'), type: 'font/woff2' },
@@ -35,6 +35,8 @@ export interface ServeOptions {
   nodeHeight?: () => Promise<number | null>;
   now?: () => number;
   log?: (line: string) => void;
+  /** Leaves out what needs the server, for pages written out as files. */
+  staticSite?: boolean;
 }
 
 // A file that fails to load keeps the last good value (or `empty`), so one bad
@@ -151,7 +153,7 @@ export function createApp(opts: ServeOptions): Server {
         nodeCheckedAt = now();
         nodeHeight = await opts.nodeHeight().catch(() => null);
       }
-      const ctx: PageCtx = { store: opts.store, network: opts.network, labels: labels(), claims: claims(), now: now(), nodeHeight };
+      const ctx: PageCtx = { store: opts.store, network: opts.network, labels: labels(), claims: claims(), now: now(), nodeHeight, staticSite: opts.staticSite === true, fixedClock: opts.now !== undefined };
       const tip = recentBlocks(ctx, 1)[0]?.hash ?? '';
       const key = `${url.pathname}${url.search}`;
       // A new block clears the pages, but no more than every 15 s: while the

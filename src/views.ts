@@ -71,7 +71,14 @@ export interface PageCtx extends Context {
   now: number;
   /** Height pearld reports, to say how far behind the index is. */
   nodeHeight?: number | null;
+  /** Pages written out as files: no search, which needs the server. */
+  staticSite?: boolean;
+  /** The clock is not the real one (the demo), so ages are not recounted in the browser. */
+  fixedClock?: boolean;
 }
+
+// A time as "5m", kept current in the browser by the page script.
+const since = (ctx: PageCtx, t: number): string => `<span data-t="${t}">${ago(ctx.now - t)}</span>`;
 
 /** What a miner is called on the page: its label, its coinbase tag, "Unnamed pool", or its address. */
 function minerTitle(r: Pick<MinerRow, 'name' | 'labelled' | 'tags' | 'paysOut'>): { text: string; mono: boolean } {
@@ -117,11 +124,11 @@ function layout(ctx: PageCtx, title: string, current: string, body: string): str
 <link rel="stylesheet" href="/static/app.css?v=${STYLE_VERSION}">
 <script>try{const t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t}catch{}</script>
 </head>
-<body data-tip="${tip?.hash ?? ''}">
+<body data-tip="${tip?.hash ?? ''}"${ctx.fixedClock ? ' data-fixed-clock' : ''}>
 <header class="bar"><div class="wrap">
   <a class="brand" href="/">Pearl mining</a>
   <nav>${nav}</nav>
-  <span class="status">${tip === undefined ? 'No blocks yet' : `<span class="live"></span>${esc(ctx.network.name)} <b>${int(tip.height)}</b> ${ago(ctx.now - tip.time)} ago`}</span>
+  <span class="status">${tip === undefined ? 'No blocks yet' : `<span class="live"></span>${esc(ctx.network.name)} <b>${int(tip.height)}</b> ${since(ctx, tip.time)} ago`}</span>
   <button type="button" id="theme" title="Light or dark">◐</button>
 </div></header>
 <main class="wrap">
@@ -137,6 +144,9 @@ document.addEventListener('pointermove',e=>{const svg=e.target.closest&&e.target
 document.addEventListener('pointerleave',hide);
 // Checks for a new block every 15 s and swaps in the fresh page body, keeping the scroll position.
 setInterval(async()=>{try{const t=await (await fetch('/api/tip.json',{cache:'no-store'})).json();if(!t.hash||t.hash===document.body.dataset.tip)return;const html=await (await fetch(location.href,{cache:'no-store'})).text();const doc=new DOMParser().parseFromString(html,'text/html');for(const sel of ['header.bar .status','main']){const a=document.querySelector(sel),b=doc.querySelector(sel);if(a&&b)a.replaceWith(b)}document.body.dataset.tip=t.hash}catch{}},15000);
+// Ages such as "5m" counted from the page's own clock, so they stay right between refreshes.
+const ago=s=>s<90?Math.max(0,Math.round(s))+'s':s<3600?Math.round(s/60)+'m':s<172800?Math.round(s/3600)+'h':Math.round(s/86400)+'d';
+if(!('fixedClock' in document.body.dataset))setInterval(()=>{const n=Date.now()/1000;document.querySelectorAll('[data-t]').forEach(e=>{e.textContent=ago(n-Number(e.dataset.t))})},15000);
 document.getElementById('theme').addEventListener('click',()=>{const r=document.documentElement;const dark=r.dataset.theme?r.dataset.theme==='dark':matchMedia('(prefers-color-scheme: dark)').matches;r.dataset.theme=dark?'light':'dark';try{localStorage.setItem('theme',r.dataset.theme)}catch{}});
 </script>
 </body>
@@ -203,7 +213,7 @@ function minerRows(ctx: PageCtx, rows: MinerRow[], claims: boolean, ranks?: numb
 <td class="n">${int(r.blocks)}</td>
 <td class="n" title="${esc(range(r.rateInterval.lo, r.rateInterval.hi, rate))}">${rate(r.rate)}</td>
 ${claims ? claimCell(r) : ''}
-<td class="n"><span class="age">${ago(ctx.now - r.lastTime)}</span></td>
+<td class="n"><span class="age">${since(ctx, r.lastTime)}</span></td>
 </tr>`)
     .join('');
 }
@@ -214,7 +224,7 @@ function blockRows(ctx: PageCtx, list: RecentBlock[]): string {
     .map((b) => `<tr>
 <td class="n mono">${int(b.height)}</td>
 <td>${minerLink(b.id, b.name)}</td>
-<td class="muted" title="${utc(b.time)} UTC">${ago(ctx.now - b.time)} ago</td>
+<td class="muted" title="${utc(b.time)} UTC">${since(ctx, b.time)} ago</td>
 <td class="n">${int(b.txCount)}${b.txCount === 1 && b.waiting !== null && b.waiting > 0 ? `<span class="sub warn">${int(b.waiting)} waiting</span>` : ''}</td>
 <td class="n">${prl(b.reward)}</td>
 <td class="n">${b.interval === null ? '' : b.interval < 0 ? 'before parent' : clock(b.interval)}</td>
@@ -272,7 +282,7 @@ export function minersPage(ctx: PageCtx, window: WindowName, query = '', page = 
 </section>
 <section class="card">
   <div class="head"><h2>Miners</h2><span class="muted">${q ? `${int(found.length)} of ${int(rows.length)}` : int(rows.length)}</span>
-    <form class="search" action="/miners" method="get"><input type="hidden" name="window" value="${window}"><input type="search" name="q" value="${esc(query.trim())}" placeholder="Pool or address" aria-label="Search miners"></form></div>
+    ${ctx.staticSite ? '' : `<form class="search" action="/miners" method="get"><input type="hidden" name="window" value="${window}"><input type="search" name="q" value="${esc(query.trim())}" placeholder="Pool or address" aria-label="Search miners"></form>`}</div>
   ${shown.length === 0 ? '<p class="muted">No miner matches.</p>' : minerTable(ctx, shown.map((s) => s.row), shown.map((s) => s.rank))}
   ${pager}
 </section>`);
@@ -293,7 +303,7 @@ function staleSection(ctx: PageCtx): string {
   if (list.length === 0) return '';
   const rows = list
     .slice(0, 50)
-    .map((s) => `<tr><td class="n mono">${int(s.height)}</td><td>${s.name === null ? '<span class="muted">unknown</span>' : esc(s.name.length > 22 ? short(s.name) : s.name)}</td><td class="muted">${ago(ctx.now - s.seenAt)} ago</td><td class="mono muted">${s.hash.slice(0, 16)}…</td></tr>`)
+    .map((s) => `<tr><td class="n mono">${int(s.height)}</td><td>${s.name === null ? '<span class="muted">unknown</span>' : esc(s.name.length > 22 ? short(s.name) : s.name)}</td><td class="muted">${since(ctx, s.seenAt)} ago</td><td class="mono muted">${s.hash.slice(0, 16)}…</td></tr>`)
     .join('');
   return `<section class="card"><div class="head"><h2>Stale blocks</h2><span class="muted">${int(list.length)} seen by this node</span></div>
 <div class="scroll"><table><thead><tr><th class="n">Height</th><th>Miner</th><th>Seen</th><th>Hash</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
@@ -321,7 +331,7 @@ export function addressPage(ctx: PageCtx, address: string): string | null {
   for (const r of got) for (const f of r.from) { byPool.set(f, (byPool.get(f) ?? 0n) + r.value); countByPool.set(f, (countByPool.get(f) ?? 0) + 1); }
   const name = (i: string): string => (i.startsWith('label:') ? i.slice(6) : short(addressOf(i.slice(7), ctx)));
   const rows = got
-    .map((r) => `<tr><td class="n mono">${int(r.height)}</td><td class="muted" title="${utc(r.time)} UTC">${ago(ctx.now - r.time)} ago</td><td>${r.from.map((f) => `<a class="who${f.startsWith('label:') ? '' : ' mono'}" href="${minerHref(f)}">${esc(name(f))}</a>`).join(', ')}</td><td class="n">${prl(r.value, 4)}</td></tr>`)
+    .map((r) => `<tr><td class="n mono">${int(r.height)}</td><td class="muted" title="${utc(r.time)} UTC">${since(ctx, r.time)} ago</td><td>${r.from.map((f) => `<a class="who${f.startsWith('label:') ? '' : ' mono'}" href="${minerHref(f)}">${esc(name(f))}</a>`).join(', ')}</td><td class="n">${prl(r.value, 4)}</td></tr>`)
     .join('');
   const poolRows = [...byPool.entries()]
     .sort((a, b) => (a[1] < b[1] ? 1 : a[1] > b[1] ? -1 : 0))
@@ -368,7 +378,7 @@ export function minerPage(ctx: PageCtx, id: string, window: WindowName): string 
 ${tile('Share of blocks', current === undefined ? '0%' : pct(current.share), current === undefined ? `none of the last ${int(net?.blocks ?? 0)}` : `${pct(current.shareInterval.lo)} to ${pct(current.shareInterval.hi)}`)}
 ${tile('Blocks', int(current?.blocks ?? 0), `of ${int(net?.blocks ?? 0)}`)}
 ${tile('Hashrate', current === undefined ? '0' : rate(current.rate), current === undefined ? '' : `${rate(current.rateInterval.lo)} to ${rate(current.rateInterval.hi)}`)}
-${tile('Last block', int(all.lastHeight), `${ago(ctx.now - all.lastTime)} ago`)}
+${tile('Last block', int(all.lastHeight), `${since(ctx, all.lastTime)} ago`)}
 ${tile('Per day, 14 days', sparkline(hist, WINDOWS.day), '')}
 </div>`;
   const audit = payoutAudit(ctx, id);
@@ -380,7 +390,7 @@ ${tile('Spent', audit.earned === 0n ? '0%' : pct(Number(audit.spent) / Number(au
 ${tile('Held', `${prl(audit.heldMature, 0)} PRL`, audit.heldImmature > 0n ? `${prl(audit.heldImmature, 0)} PRL still maturing` : 'mature, unspent')}
 ${tile('Paid to', `${int(audit.payees)} addresses`, audit.sentOut === null ? '' : `${prl(audit.sentOut, 0)} PRL`)}
 ${tile('To miners', audit.sentOut === null ? 'unknown' : (audit.earned === 0n ? '0%' : pct(Number(audit.sentOut) / Number(audit.earned), 0)), audit.sentOut === null ? 'pays from a wallet' : 'of rewards earned', audit.sentOut === null ? 'This pool pays miners from a separate wallet whose coinbases these transactions do not spend, so the chain cannot follow it.' : 'Share of all rewards paid to outside addresses, not change. The rest is held (not yet paid) or kept (fee). Chain-measured, all-time.')}
-${tile('Last spend', audit.lastSpend === null ? 'never' : int(audit.lastSpend.height), audit.lastSpend === null ? '' : `${ago(ctx.now - audit.lastSpend.time)} ago`)}
+${tile('Last spend', audit.lastSpend === null ? 'never' : int(audit.lastSpend.height), audit.lastSpend === null ? '' : `${since(ctx, audit.lastSpend.time)} ago`)}
 </div>
 </section>`;
   const e = emptyBlocks(ctx, id, window);
@@ -411,7 +421,7 @@ ${tile('Blocks found', int(current.blocks), '')}
   const linked = links(ctx, id).coSpent;
   const others = [...new Set(linked.flatMap((c) => c.with))];
   const addressCard = `<section class="card"><div class="head"><h2>Addresses</h2>${entry !== undefined ? `<span class="muted">${esc(sourceName(entry.source))}</span>` : ''}</div>
-<ul class="plain">${addresses.map((a) => `<li class="mono"><a href="/address/${esc(a)}">${esc(a)}</a></li>`).join('')}</ul>
+<ul class="plain">${addresses.map((a) => `<li class="mono">${isValidAddress(a, ctx.network) ? `<a href="/address/${esc(a)}">${esc(a)}</a>` : esc(a)}</li>`).join('')}</ul>
 ${all.tags.length > 0 ? `<div class="tags">${all.tags.map((t) => `<span class="chip">${esc(t.replace(/^\/+|\/+$/g, ''))}</span>`).join('')}</div>` : ''}</section>`;
   const linkCard = others.length === 0 ? '' : `<section class="card"><div class="head"><h2>Same owner as</h2></div>
 <ul class="plain">${others.slice(0, 20).map((w) => `<li>${minerLink(w, w.startsWith('label:') ? w.slice(6) : addressOf(w.slice(7), ctx))}</li>`).join('')}</ul></section>`;

@@ -10,7 +10,18 @@ Start an empty store a number of blocks below the tip with `START_BLOCKS`; 13361
 START_BLOCKS=13361 node --no-warnings=ExperimentalWarning dist/cli.js index
 ```
 
-`INDEX_MINUTES` stops a run after that many minutes; the next run resumes from the stored cursor. The empty-block check compares each block with the mempool seen just before it, so it needs the indexer running at the tip without breaks.
+`INDEX_MINUTES` stops a run after that many minutes; the next run resumes from the stored cursor. The empty-block check compares each block with the mempool seen just before it, so it needs the indexer running at the tip without breaks. The Pages build below runs in turns, so it has no empty-block check.
+
+## GitHub Pages
+
+`.github/workflows/pages.yml` publishes the dashboard as files every 15 minutes. Each run restores the index from the Actions cache, indexes new blocks from the public node, reads the pools' pages if an hour has passed, saves the index, then writes the site with:
+
+```bash
+OUT_DIR=site BASE_PATH=/pearl-mining-dashboard node --no-warnings=ExperimentalWarning dist/cli.js export
+```
+
+`export` runs the web server on a free port and follows its links from the overview, writing each page as `index.html` in a folder named after its path and query (`/miners?window=day` becomes `/miners/window/day/`). The search box needs the server, so it is left out. A first run starts a month below the tip and indexes for 40 minutes at a time (`INDEX_MINUTES`), so the site fills in over about ten hours. To turn it on, set the repository's Pages source to GitHub Actions. GitHub stops scheduled workflows in a repository with no activity for 60 days.
+
 
 ## A node of your own
 

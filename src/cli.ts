@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// pearl-mining-dashboard index | serve
-// Both read the node settings from the environment (see src/node.ts) and
+// pearl-mining-dashboard index | serve | export
+// They read the node settings from the environment (see src/node.ts) and
 // keep their data in DATA_DIR (./data unless given).
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -124,13 +124,22 @@ async function main(): Promise<void> {
     log('[index] stopped');
     return;
   }
+  if (cmd === 'export') {
+    const { exportSite } = await import('./export.js');
+    const out = process.env.OUT_DIR ?? 'site';
+    const nodeHeight = await client.getBlockCount().catch(() => null);
+    const n = await exportSite({ store, network, dataDir, outDir: out, base: process.env.BASE_PATH ?? '', nodeHeight, maxPages: Number(process.env.MAX_PAGES ?? 20_000), log });
+    log(`[export] ${n} pages in ${out}`);
+    store.close();
+    return;
+  }
   if (cmd === 'serve') {
     const { serve } = await import('./server.js');
     void ws?.close();
     await serve({ store, network, dataDir, port: Number(process.env.PORT ?? 8080), host: process.env.HOST ?? '127.0.0.1', nodeHeight: () => client.getBlockCount(), refreshPools: process.env.REFRESH_POOLS !== '0', log });
     return;
   }
-  console.error('usage: cli.js index | serve | pools | backfill | proof-message | demo');
+  console.error('usage: cli.js index | serve | export | pools | backfill | proof-message | demo');
   process.exitCode = 2;
 }
 

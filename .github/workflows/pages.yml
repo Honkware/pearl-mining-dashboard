@@ -1,0 +1,70 @@
+name: pages
+
+# Every 15 minutes: index new blocks from the public pearlchain.live node,
+# write the pages out as files and publish them on GitHub Pages. The index is
+# kept between runs in the Actions cache. A first run starts a month below
+# the tip and indexes for 40 minutes at a time until it reaches it.
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One run at a time, each picking up the index the last one saved.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: index-${{ github.run_id }}
+          restore-keys: index-
+      - name: Index
+        run: node --no-warnings=ExperimentalWarning dist/cli.js index
+        env:
+          START_BLOCKS: '13361'
+          STOP_AT_TIP: '1'
+          INDEX_MINUTES: '40'
+      - name: Pool names
+        continue-on-error: true
+        # Pools' own pages are read once an hour, as the server does.
+        run: |
+          if [ -z "$(find data/pool-labels.json -mmin -60 2>/dev/null)" ]; then
+            node --no-warnings=ExperimentalWarning dist/cli.js pools
+          fi
+      # Each block is written with the cursor in one transaction, so even a failed run leaves an index worth keeping.
+      - uses: actions/cache/save@v4
+        if: ${{ !cancelled() && hashFiles('data/mainnet.sqlite') != '' }}
+        with:
+          path: data
+          key: index-${{ github.run_id }}
+      - name: Pages
+        run: node --no-warnings=ExperimentalWarning dist/cli.js export
+        env:
+          OUT_DIR: site
+          BASE_PATH: /${{ github.event.repository.name }}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
