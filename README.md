@@ -1,38 +1,12 @@
 # pearl-mining-dashboard
 
-Made with [pearljs](#made-with-pearljs).
+A dashboard of who mines Pearl blocks, read from your own pearld node. For each pool and payout address it shows its share of blocks with a 95% interval, an estimated hashrate, where its coinbase rewards went, and how often it mined empty blocks while transactions were waiting. It also tests what each pool says about its own size against the blocks it actually found.
 
-Who mines Pearl blocks, read from a pearld node: each payout address's share of blocks with a 95% interval, an estimated hashrate in pearld's units, network hashrate, difficulty, block times and effort, and a check of what pools claim against the blocks they actually found.
-
-It is a TypeScript server built on [`pearljs`](https://github.com/Honkware/pearljs), the TypeScript SDK for Pearl. The indexer follows the node's best chain, wakes on pearld's block notifications, checks each block with pearljs, survives reorganisations and restarts, and keeps one row per block in SQLite. The web server renders the pages from that database, with a small JSON API. The `pools` command names pools from what they publish about themselves and reads their hashrate claims.
-
-## Made with pearljs
-
-This dashboard is the first application built on pearljs, a TypeScript SDK for Pearl, and it is meant to show what pearljs makes possible: following the chain through reorganisations, reading every block and its certificate, checking blocks, verifying signed messages, and testing all of it against a simulated chain without a node. The table below shows which part of pearljs does what here. Set `PEARLJS_URL` to make the "Made with pearljs" footer a link.
-
-## How pearljs is used
-
-| pearljs | What it does here | Where |
-| --- | --- | --- |
-| `watchChain` with `ws` | Follows the best chain block by block from a stored cursor, undoes reorganised blocks, and wakes on pearld's block notifications | `src/indexer.ts` |
-| `PearldClient`, `PearlWsClient` | RPC and websocket to pearld over TLS, with undici trusting pearld's `rpc.cert` | `src/node.ts` |
-| `inspectTransaction` | Reads each coinbase: payouts, their addresses, the reward and witness commitment | `src/facts.ts` |
-| `checkMerkleRoot`, `checkWitnessCommitment`, `checkCertificateBinding`, `checkCertificateRules` | Checks every indexed block; a failure is logged and kept with the block | `src/facts.ts` |
-| `workForBits`, `difficultyForBits`, `blockSubsidy` | Work, difficulty and subsidy of each block, for hashrate and fees | `src/facts.ts` |
-| `isMoECertificate`, certificate versions | Which proof kind and version each block carries | `src/facts.ts` |
-| `toOutputScript`, `fromOutputScript` | Addresses to payout scripts and back, for labels and pages | `src/labels.ts` |
-| `verifyMessage` | Checks a pool's signed claim to an address | `src/labels.ts` |
-| `PearldClient.getRawMempoolVerbose` | The mempool when each block arrives, for the empty-block check | `src/indexer.ts` |
-| `isValidAddress` | The address pages and address search | `src/views.ts`, `src/server.ts` |
-| `parseBlock`, `PearldClient.getRawBlock` | Re-reading past blocks for their payouts | `src/cli.ts` |
-| `SimulatedChain`, `testAddress`, `testAccount` | Every test, and the demo: miners, reorgs, restarts and coinbase spends without a node | `test/`, `src/demo.ts` |
-| `startRegtest` | The live test against a real pearld | `test-live/regtest.test.ts` |
-
-What pearljs did not cover is written down in `PEARLJS-GAPS.md`.
+Pool names come from what the pools publish about themselves (block lists, wallets and payout transactions), matched against the chain, with coinbase tags and the PearlStation and PearlTrack trackers filling gaps. A pool can also prove an address is its own by signing a message with it. The method behind each number, and what the chain cannot tell you, are in [docs/reference.md](docs/reference.md).
 
 ## Run the demo
 
-The demo builds a seeded simulated chain of 3,600 blocks with a mix of miners shaped like mainnet's (made-up pools named Pool A to Pool E), indexes it and serves it. No node is needed.
+The demo builds a seeded simulated chain of 3,600 blocks with made-up pools, indexes it and serves it, so it needs no node. It needs Node 22.13 or newer.
 
 ```bash
 npm install
@@ -46,127 +20,15 @@ npm run build
 node --no-warnings=ExperimentalWarning dist/cli.js demo
 ```
 
-Then open http://127.0.0.1:8080. Building the chain takes about 30 seconds.
+Then open http://127.0.0.1:8080.
 
-Node 22.13 or newer is needed for `node:sqlite`. `pearljs` is pulled from npm, so `npm install` is all it needs.
+## Run it on mainnet
 
-## Run it against a real node
+Point the indexer at a pearld node with a limited RPC user, run the web server beside it, and run `pools` to name the pools. [docs/running.md](docs/running.md) has the pearld settings and commands, and [docs/pools.md](docs/pools.md) covers naming, claims and signed names.
 
-### 1. pearld
+## Made with pearljs
 
-Use a pearld release binary, or build it from Pearl's source (github.com/pearl-research-labs/pearl), which needs its zk-pow Rust bindings built first; its Taskfile has the steps. Give it a limited RPC user in `pearld.conf` in its home directory, so the passwords stay off the command line:
-
-```
-rpcuser=admin
-rpcpass=<a long random password>
-rpclimituser=dashboard
-rpclimitpass=<another long random password>
-rpclisten=127.0.0.1:44107
-```
-
-Then start it on mainnet, which is its default:
-
-```bash
-pearld
-```
-
-Every method the dashboard calls (`getbestblock`, `getblockhash`, `getblock`, `getblockcount`, `getblockheader`, `getchaintips`) is open to pearld's limited user. No `--txindex` or `--addrindex` is needed: fees are read from the coinbase, and spends of coinbase outputs are seen as the indexer passes each block. pearld writes its TLS certificate to `rpc.cert` in its home directory (`~/Library/Application Support/Pearld` on macOS, `~/.pearld` on Linux).
-
-A full mainnet node downloads the whole chain from peers found through Pearl's DNS seeds; that takes disk, bandwidth and time this README has not measured. Running one is your call.
-
-### 2. Indexer
-
-```bash
-export PEARL_NETWORK=mainnet PEARLD_URL=https://127.0.0.1:44107 PEARLD_USER=dashboard PEARLD_PASS=... PEARLD_CERT="$HOME/Library/Application Support/Pearld/rpc.cert"
-```
-
-```bash
-node --no-warnings=ExperimentalWarning dist/cli.js index
-```
-
-It starts at genesis (or `START_HEIGHT`), logs every 1000th block, waits at the tip for new blocks (woken by pearld's websocket, with a poll as backup), and resumes from its stored cursor after a restart. Each block goes through pearljs's block checks; a failure is logged as `[index] block N <hash> failed <check>` and stored with the block. `STOP_AT_TIP=1` makes it exit at the tip instead. Data goes to `data/mainnet.sqlite` (`DATA_DIR` to change it).
-
-### 3. Web server
-
-In a second shell with the same environment:
-
-```bash
-node --no-warnings=ExperimentalWarning dist/cli.js serve
-```
-
-It listens on 127.0.0.1:8080 (`HOST`, `PORT`) and shows a banner while the indexer is behind the node.
-
-### Older payouts
-
-The indexer records what each coinbase-spending transaction paid, and its other inputs, as it goes. The inputs are how a pool's change is told from a payment: an address a pool paid and later spent from, in another of its payout transactions, is the pool's own. A store made before either was recorded fills it in for past blocks with:
-
-```bash
-node --no-warnings=ExperimentalWarning dist/cli.js backfill
-```
-
-It reads only the blocks that hold such transactions, and can be stopped and run again. Until it has finished, pool pages show how many addresses a pool paid but not how much. Whether a block left transactions waiting is only known for blocks seen live.
-
-### Pool names and claims
-
-```bash
-node --no-warnings=ExperimentalWarning dist/cli.js pools
-```
-
-`pools` reads each pool's public API (block hashes, its coinbase wallet, or its payout transactions), matches it against the indexed chain, and writes `pool-labels.json` and `pool-claims.json` in `DATA_DIR`, with a dated copy of everything it read under `sources/`. It then fills in addresses that PearlStation and PearlTrack name, and gives an unnamed address the name of any named address whose coinbases it was spent together with. Run it again after the indexer reaches the tip, and now and then, since pool feeds only cover recent blocks. The pools and endpoints are listed in `src/pools.ts`.
-
-Names are taken in this order, the first one winning: `labels.json` (yours), `signed-names.json` (proven by signature), then `pool-labels.json`. An unnamed address shows its coinbase tag if it writes one, or "Unnamed pool" if it pays its coinbases out to ten or more addresses at once.
-
-A pool can prove an address is its own by signing a short text with it, with Oyster's `signmessage` or pearljs. This prints the text to sign:
-
-```bash
-node --no-warnings=ExperimentalWarning dist/cli.js proof-message Example Pool
-```
-
-Put the result in `signed-names.json`; entries whose signature does not verify are ignored and logged by the server:
-
-```json
-{ "names": [ { "pool": "Example Pool", "address": "prl1p...", "signature": "<base64>" } ] }
-```
-
-All these files are reread when they change.
-
-`labels.json` groups payout addresses under a name. Every entry needs a source; leave an address unlabelled rather than guess:
-
-```json
-{ "identities": [ { "label": "Example pool", "scripts": ["prl1p..."], "source": "the pool's own payout page, 2026-11-18", "note": "optional" } ] }
-```
-
-`claims.json` holds what a pool or stats site says, next to what `pools` writes in `pool-claims.json`. Give a share, or a hashrate together with the network hashrate from the same page, since pools and stats sites do not use pearld's units:
-
-```json
-{ "claims": [ { "label": "Example pool", "hashrate": 43.9, "networkHashrate": 91.9, "readAt": 1795046400, "source": "miningboard.com" } ] }
-```
-
-## Pages and API
-
-- `/` headline numbers, the top ten miners, hashrate and block-time charts, latest blocks. `?window=day|week|month|all` picks the last 445, 3,118 or 13,361 blocks, or all of them.
-- `/miners` every miner, with a ranking chart of shares, their likely ranges and what pools say.
-- `/miner/<id>` one miner: its numbers, its pool claim against what it found, where its coinbase rewards went (earned, spent, held, how many addresses it paid), its empty blocks and whether transactions were waiting when it mined them, its proof types, its addresses and coinbase tags, and other addresses it shares an owner with.
-- `/address/<address>` one address: what it mined, and the payments it received from transactions that spend pool coinbases. Typing an address into the miners search goes here.
-- `/blocks` every block, newest first, and the stale blocks this node saw.
-
-- `/api/network.json`, `/api/miners.json`, `/api/blocks.json`, `/api/stale.json`.
-
-In the miners table, "Pool claims" is the share a pool publishes about itself, and the column only appears when a miner in view has one. "matches" means the claim is inside the 95% range of what the pool's blocks show; "too high" or "too low" means it is outside, which normal luck produces less than 5 times in 100. A claim describes the pool now, so it is only tested on the 1D and 1W windows. Hovering a share or hashrate shows its range.
-
-## What it can and cannot tell you
-
-The question it started from was why a pool does not publish its measured hashrate or its effort per block. Those two numbers come from the shares miners send a pool, and shares never reach the chain, so only the pool can publish them. This dashboard cannot.
-
-What it answers from public data alone:
-
-- Who was paid for each block, and each address's or labelled pool's share of the last day, week or month of blocks, with an exact 95% interval.
-- An estimated hashrate per miner and for the network, in pearld's units (the same as `getnetworkhashps`), with an interval.
-- Whether a pool's published share or hashrate is consistent with the blocks its labelled addresses found, as a probability.
-- Network effort and block times against the 194-second target, difficulty, empty blocks, fees claimed over the subsidy, certificate versions, and stale blocks this node saw.
-- Addresses whose coinbase outputs were spent together, or paid out to many addresses, as evidence for grouping them.
-
-What it cannot answer: a pool's own share-based hashrate and effort, which addresses belong to which pool unless someone with a source says so, and stale blocks this node never heard of.
+This is the first application built on [pearljs](https://github.com/Honkware/pearljs), the TypeScript SDK for Pearl. pearljs follows the chain through reorganisations, parses every block and its certificate, checks each block, reads the mempool, verifies signed messages, and provides the simulated chain every test runs on. The table in [docs/reference.md](docs/reference.md) shows which part does what, and [PEARLJS-GAPS.md](PEARLJS-GAPS.md) lists what it did not cover.
 
 ## Tests
 
@@ -174,20 +36,12 @@ What it cannot answer: a pool's own share-based hashrate and effort, which addre
 npm test
 ```
 
-35 tests run against `pearljs/testing`'s simulated chain: the statistics against values from scipy, the indexer through reorganisations while running and while stopped, pearljs's block checks, coinbase co-spends, pool naming from feeds, trackers and spending, coinbase tags taken from mainnet blocks, signed names, claims, and the pages. One more runs against a real regtest pearld fed saved blocks (a JSON array of block hex, as `getblock <hash> 0` returns it):
+The tests run against pearljs's simulated chain; one more runs against a real regtest pearld, described in [docs/reference.md](docs/reference.md).
 
-```bash
-PEARLD=/path/to/pearld PEARL_CHAIN=/path/to/saved-blocks.json npx vitest run --config vitest.live.config.ts
-```
+## Related
 
-## Limits
+[pearl-mineable](https://github.com/Honkware/pearl-mineable) is a sibling tool built on pearljs. It reads a model's `config.json` and works out how much of its prompt math mines Pearl, on which cards and for what earnings, in the browser and with no node.
 
-- The simulated chain never changes difficulty, so the demo's difficulty figures do not move.
-- An identity is the address of the largest coinbase output. A pool that pays every miner straight from the coinbase shows as its largest payee, and a pool that rotates addresses shows as several miners until a pool feed, a tracker or a co-spend names them.
-- Solo pools' blocks pay the miner who found them; those addresses are named "<pool> Solo", not as the pool.
-- Testnet stops at height 67370, where certificates move to V4, until pearljs parses them. See `PEARLJS-GAPS.md`.
-- Mainnet: first run 2026-11-18 against pearld 1.5.7. The node's sync from genesis to block 145,331 took 173 minutes, mostly pearld fetching certificate-bearing headers from one peer at a time; the indexer keeps up with it at about 3,000 blocks a minute.
+## Licence
 
-## Another pearljs app
-
-[pearl-mineable](https://github.com/Honkware/pearl-mineable) is a sibling tool, also built on pearljs: it reads a model's `config.json` and works out how much of its prompt math mines Pearl, on which cards, and what it earns — in the browser, with no node.
+MIT. This project is independent of Pearl Research Labs and not endorsed by them.
