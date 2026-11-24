@@ -89,3 +89,10 @@ test('bad requests get plain answers, not server errors', async () => {
   expect(res.headers.get('content-security-policy')).toContain("default-src 'self'");
   expect(res.headers.get('x-content-type-options')).toBe('nosniff');
 });
+
+test('a claims file that fails to load leaves the pages up', async () => {
+  writeFileSync(join(dir, 'pool-claims.json'), JSON.stringify({ claims: [{ label: 'Half', networkHashrate: 1e20, readAt: 1, source: 'a page' }] }));
+  const res = await fetch(`${base}/?window=day`);
+  expect(res.status).toBe(200);
+  expect(await res.text()).toContain('Big pool');
+});

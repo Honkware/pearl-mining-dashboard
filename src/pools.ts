@@ -342,7 +342,8 @@ export async function collectPools(opts: { store: Store; network: PearlNetwork; 
       writeFileSync(join(dir, `${pool.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.json`), JSON.stringify({ label: pool.label, urls: pool.urls, read: opts.now, bodies }));
       const e = pool.parse(bodies);
       const m = matchEvidence(opts.store, opts.network, e);
-      const claim = e.claim !== undefined && e.claim.networkHashrate > 0
+      // A page can leave out the pool's hashrate (Pearl Fortune's did on 2026-11-24); half a claim is no claim.
+      const claim = e.claim !== undefined && e.claim.hashrate > 0 && e.claim.networkHashrate > 0
         ? { label: pool.label, hashrate: e.claim.hashrate, networkHashrate: e.claim.networkHashrate, readAt: opts.now, source: pool.site }
         : undefined;
       results.push({ label: pool.label, ...m, ...(claim === undefined ? {} : { claim }) });
@@ -381,7 +382,7 @@ export async function collectPools(opts: { store: Store; network: PearlNetwork; 
       for (const [label, scripts] of byPool) trackerLabels.push({ label, scripts, source: `${t.name}, read ${day}` });
       for (const c of t.claims?.(bodies) ?? []) {
         const label = results.find((r) => sameName(r.label) === sameName(c.pool))?.label ?? trackerLabels.find((l) => sameName(l.label) === sameName(c.pool))?.label ?? c.pool;
-        if (c.networkHashrate > 0 && !trackerClaims.some((x) => x.label === label) && !results.some((r) => r.label === label && r.claim !== undefined)) {
+        if (c.hashrate > 0 && c.networkHashrate > 0 && !trackerClaims.some((x) => x.label === label) && !results.some((r) => r.label === label && r.claim !== undefined)) {
           trackerClaims.push({ label, hashrate: c.hashrate, networkHashrate: c.networkHashrate, readAt: opts.now, source: t.name });
         }
       }
