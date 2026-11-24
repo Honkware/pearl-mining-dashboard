@@ -1,6 +1,18 @@
 # Running it against a real node
 
-## pearld
+## The public node
+
+With `PEARLD_URL` unset, the indexer and server use pearlchain.live's public mainnet node at https://pearlchain.live/rpc, set up as pearljs's "Choosing a backend" guide shows. It needs no login. It gives each address 240 tokens refilled at 2 a second, and a block costs the indexer 4 (`getblockhash` and `getblock`), so `src/pace.ts` spends at 1.8 a second: about 27 blocks a minute once the first burst is used. Its websocket feed is its own format, not pearld's, so the indexer polls for new blocks.
+
+Start an empty store a number of blocks below the tip with `START_BLOCKS`; 13361 is the dashboard's month:
+
+```bash
+START_BLOCKS=13361 node --no-warnings=ExperimentalWarning dist/cli.js index
+```
+
+`INDEX_MINUTES` stops a run after that many minutes; the next run resumes from the stored cursor. The empty-block check compares each block with the mempool seen just before it, so it needs the indexer running at the tip without breaks.
+
+## A node of your own
 
 Use a pearld release binary, or build it from Pearl's source (github.com/pearl-research-labs/pearl), which needs its zk-pow Rust bindings built first; its Taskfile has the steps. Give it a limited RPC user in `pearld.conf` in its home directory, so the passwords stay off the command line:
 

@@ -87,30 +87,38 @@ async function main(): Promise<void> {
       if ((i + 1) % 1000 === 0) log(`[backfill] ${i + 1} of ${todo.length}`);
     }
     store.setMeta(INPUTS_COMPLETE, '1');
-    await ws.close();
+    await ws?.close();
     store.close();
     log('[backfill] done');
     return;
   }
   if (cmd === 'index') {
+    // START_BLOCKS starts an empty store that many blocks below the tip instead of at START_HEIGHT.
+    let startHeight = Number(process.env.START_HEIGHT ?? 0);
+    if (process.env.START_BLOCKS !== undefined && store.cursor() === null) {
+      startHeight = Math.max(0, (await client.getBlockCount()) - Number(process.env.START_BLOCKS));
+    }
     const watch = startIndexer({
       store,
       rpc: client,
-      ws,
+      ...(ws === null ? {} : { ws }),
       watchMempool: true,
       network,
-      startHeight: Number(process.env.START_HEIGHT ?? 0),
+      startHeight,
       stopAtTip: process.env.STOP_AT_TIP === '1',
       log,
     });
     const stop = (): void => watch.stop();
     process.on('SIGINT', stop);
     process.on('SIGTERM', stop);
+    // INDEX_MINUTES stops a run after that long, for jobs that index in turns.
+    const minutes = Number(process.env.INDEX_MINUTES ?? 0);
+    if (minutes > 0) setTimeout(stop, minutes * 60_000).unref();
     try {
       await watch.done;
     } finally {
       // An open websocket would keep a failed indexer's process alive, looking healthy.
-      await ws.close();
+      await ws?.close();
       store.close();
     }
     log('[index] stopped');
@@ -118,7 +126,7 @@ async function main(): Promise<void> {
   }
   if (cmd === 'serve') {
     const { serve } = await import('./server.js');
-    void ws.close();
+    void ws?.close();
     await serve({ store, network, dataDir, port: Number(process.env.PORT ?? 8080), host: process.env.HOST ?? '127.0.0.1', nodeHeight: () => client.getBlockCount(), refreshPools: process.env.REFRESH_POOLS !== '0', log });
     return;
   }
