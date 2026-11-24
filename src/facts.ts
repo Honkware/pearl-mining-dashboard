@@ -56,6 +56,8 @@ export interface CoinbaseSpend {
   outputs: number;
   /** The coinbase outputs this transaction spends, as txid:vout. */
   spent: string[];
+  /** Its other inputs, as txid:vout: the pool's change comes back through these. */
+  others: string[];
   /** What it pays, output by output. */
   outs: { vout: number; value: bigint; script: string }[];
 }
@@ -171,12 +173,12 @@ export function blockFacts(block: PearlBlock, height: number, hash: string, netw
 export function coinbaseSpends(block: PearlBlock, isCoinbaseOutput: (outpoint: string) => boolean): CoinbaseSpend[] {
   const found: CoinbaseSpend[] = [];
   for (const tx of block.transactions.slice(1)) {
-    const spent = tx.ins
-      .map((input) => `${hex(Uint8Array.from(input.hash).reverse())}:${input.index}`)
-      .filter(isCoinbaseOutput);
+    const inputs = tx.ins.map((input) => `${hex(Uint8Array.from(input.hash).reverse())}:${input.index}`);
+    const spent = inputs.filter(isCoinbaseOutput);
     if (spent.length > 0) {
       const outs = tx.outs.map((o, vout) => ({ vout, value: o.value, script: hex(o.script) }));
-      found.push({ txid: tx.getId(), inputs: tx.ins.length, outputs: tx.outs.length, spent, outs });
+      const others = inputs.filter((i) => !spent.includes(i));
+      found.push({ txid: tx.getId(), inputs: tx.ins.length, outputs: tx.outs.length, spent, others, outs });
     }
   }
   return found;

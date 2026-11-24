@@ -51,11 +51,18 @@ async function main(): Promise<void> {
   const store = new Store(join(dataDir, `${network.name}.sqlite`));
 
   if (cmd === 'backfill') {
-    // Stores made before payout outputs were recorded: re-read the blocks that hold coinbase spends.
+    // Stores made before payout outputs, or payout transactions' other inputs, were recorded:
+    // re-read the blocks that hold coinbase spends missing either.
     const { parseBlock } = await import('pearljs');
     const { coinbaseSpends } = await import('./facts.js');
+    const { INPUTS_COMPLETE } = await import('./db.js');
     const todo = store.db
-      .prepare('SELECT DISTINCT s.height AS height, b.hash AS hash FROM spends s JOIN blocks b ON b.height = s.height WHERE NOT EXISTS (SELECT 1 FROM spend_outputs o WHERE o.txid = s.txid) ORDER BY s.height')
+      .prepare(
+        `SELECT DISTINCT s.height AS height, b.hash AS hash FROM spends s JOIN blocks b ON b.height = s.height
+         WHERE NOT EXISTS (SELECT 1 FROM spend_outputs o WHERE o.txid = s.txid)
+            OR (s.inputs > (SELECT COUNT(*) FROM spends c WHERE c.txid = s.txid) AND NOT EXISTS (SELECT 1 FROM spend_inputs i WHERE i.txid = s.txid))
+         ORDER BY s.height`,
+      )
       .all() as { height: number; hash: string }[];
     log(`[backfill] ${todo.length} blocks to re-read`);
     for (let i = 0; i < todo.length; i++) {
@@ -72,9 +79,14 @@ async function main(): Promise<void> {
         }
       }
       const block = parseBlock(raw);
-      store.tx(() => store.addSpendOutputs(height, coinbaseSpends(block, (o) => store.isCoinbaseOutput(o))));
+      store.tx(() => {
+        const spends = coinbaseSpends(block, (o) => store.isCoinbaseOutput(o));
+        store.addSpendOutputs(height, spends);
+        store.addSpendInputs(height, spends);
+      });
       if ((i + 1) % 1000 === 0) log(`[backfill] ${i + 1} of ${todo.length}`);
     }
+    store.setMeta(INPUTS_COMPLETE, '1');
     await ws.close();
     store.close();
     log('[backfill] done');
