@@ -317,18 +317,28 @@ export function addressPage(ctx: PageCtx, address: string): string | null {
   const total = got.reduce((s, r) => s + r.value, 0n);
   const tile = (k: string, v: string, sub: string): string => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
   const byPool = new Map<string, bigint>();
-  for (const r of got) for (const f of r.from) byPool.set(f, (byPool.get(f) ?? 0n) + r.value);
+  const countByPool = new Map<string, number>();
+  for (const r of got) for (const f of r.from) { byPool.set(f, (byPool.get(f) ?? 0n) + r.value); countByPool.set(f, (countByPool.get(f) ?? 0) + 1); }
   const name = (i: string): string => (i.startsWith('label:') ? i.slice(6) : short(addressOf(i.slice(7), ctx)));
   const rows = got
     .map((r) => `<tr><td class="n mono">${int(r.height)}</td><td class="muted" title="${utc(r.time)} UTC">${ago(ctx.now - r.time)} ago</td><td>${r.from.map((f) => `<a class="who${f.startsWith('label:') ? '' : ' mono'}" href="${minerHref(f)}">${esc(name(f))}</a>`).join(', ')}</td><td class="n">${prl(r.value, 4)}</td></tr>`)
     .join('');
+  const poolRows = [...byPool.entries()]
+    .sort((a, b) => (a[1] < b[1] ? 1 : a[1] > b[1] ? -1 : 0))
+    .map(([f, v]) => `<tr><td><a class="who${f.startsWith('label:') ? '' : ' mono'}" href="${minerHref(f)}">${esc(name(f))}</a></td><td class="n">${int(countByPool.get(f) ?? 0)}</td><td class="n">${prl(v, 4)}</td></tr>`)
+    .join('');
+  const byPoolSection = byPool.size === 0 ? '' : `<section class="card"><div class="head"><h2>By pool</h2><span class="muted">what each pool paid this address</span></div>
+<div class="scroll"><table><thead><tr><th>Pool</th><th class="n">Payments</th><th class="n">PRL</th></tr></thead><tbody>${poolRows}</tbody></table></div>
+<p class="muted">From transactions that spend each pool's coinbases. A pool that pays from a separate wallet will not appear here.</p>
+</section>`;
   return layout(ctx, `${short(address)}: Pearl mining`, '', `
 <div class="title"><h1 class="mono">${esc(address)}</h1></div>
 <div class="stats">
 ${tile('Mined', mined === null ? 'no blocks' : `${int(mined.blocks)} blocks`, mined === null ? '' : `<a href="${minerHref(mined.id)}">${esc(minerTitle(mined).text)}</a>`)}
 ${tile('Received from pools', `${prl(total, 2)} PRL`, `${int(got.length)} payments${got.length === 100 ? ' (latest 100)' : ''}`)}
-${tile('Paid by', byPool.size === 0 ? 'none' : [...byPool.keys()].map(name).slice(0, 3).join(', '), '')}
+${tile('Paid by', byPool.size === 0 ? 'none' : `${int(byPool.size)} pool${byPool.size === 1 ? '' : 's'}`, '')}
 </div>
+${byPoolSection}
 <section class="card"><div class="head"><h2>Payments from pools</h2></div>
 ${got.length === 0 ? '<p class="muted">None</p>' : `<div class="scroll"><table><thead><tr><th class="n">Block</th><th>When</th><th>From</th><th class="n">PRL</th></tr></thead><tbody>${rows}</tbody></table></div>`}
 </section>`);
@@ -369,6 +379,7 @@ ${tile('Rewards earned', `${prl(audit.earned, 0)} PRL`, '')}
 ${tile('Spent', audit.earned === 0n ? '0%' : pct(Number(audit.spent) / Number(audit.earned), 0), `${int(audit.txs)} transactions`)}
 ${tile('Held', `${prl(audit.heldMature, 0)} PRL`, audit.heldImmature > 0n ? `${prl(audit.heldImmature, 0)} PRL still maturing` : 'mature, unspent')}
 ${tile('Paid to', `${int(audit.payees)} addresses`, audit.sentOut === null ? '' : `${prl(audit.sentOut, 0)} PRL`)}
+${tile('To miners', audit.sentOut === null ? 'unknown' : (audit.earned === 0n ? '0%' : pct(Number(audit.sentOut) / Number(audit.earned), 0)), audit.sentOut === null ? 'pays from a wallet' : 'of rewards earned', audit.sentOut === null ? 'This pool pays miners from a separate wallet whose coinbases these transactions do not spend, so the chain cannot follow it.' : 'Share of all rewards paid to outside addresses, not change. The rest is held (not yet paid) or kept (fee). Chain-measured, all-time.')}
 ${tile('Last spend', audit.lastSpend === null ? 'never' : int(audit.lastSpend.height), audit.lastSpend === null ? '' : `${ago(ctx.now - audit.lastSpend.time)} ago`)}
 </div>
 </section>`;
