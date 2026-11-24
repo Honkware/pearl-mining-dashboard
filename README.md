@@ -4,7 +4,7 @@ Made with [pearljs](#made-with-pearljs).
 
 Who mines Pearl blocks, read from a pearld node: each payout address's share of blocks with a 95% interval, an estimated hashrate in pearld's units, network hashrate, difficulty, block times and effort, and a check of what pools claim against the blocks they actually found.
 
-It is a TypeScript server built on `pearljs`, the TypeScript SDK for Pearl in the sibling folder. The indexer follows the node's best chain, wakes on pearld's block notifications, checks each block with pearljs, survives reorganisations and restarts, and keeps one row per block in SQLite. The web server renders the pages from that database, with a small JSON API. The `pools` command names pools from what they publish about themselves and reads their hashrate claims.
+It is a TypeScript server built on [`pearljs`](https://github.com/Honkware/pearljs), the TypeScript SDK for Pearl. The indexer follows the node's best chain, wakes on pearld's block notifications, checks each block with pearljs, survives reorganisations and restarts, and keeps one row per block in SQLite. The web server renders the pages from that database, with a small JSON API. The `pools` command names pools from what they publish about themselves and reads their hashrate claims.
 
 ## Made with pearljs
 
@@ -48,7 +48,7 @@ node --no-warnings=ExperimentalWarning dist/cli.js demo
 
 Then open http://127.0.0.1:8080. Building the chain takes about 30 seconds.
 
-Node 22.13 or newer is needed for `node:sqlite`. `pearljs` comes from the sibling folder `../pearljs` (`file:` dependency); build it there first with `npm run build` if `../pearljs/dist` is missing.
+Node 22.13 or newer is needed for `node:sqlite`. `pearljs` is pulled from npm, so `npm install` is all it needs.
 
 ## Run it against a real node
 
@@ -187,3 +187,7 @@ PEARLD=/path/to/pearld PEARL_CHAIN=/path/to/saved-blocks.json npx vitest run --c
 - Solo pools' blocks pay the miner who found them; those addresses are named "<pool> Solo", not as the pool.
 - Testnet stops at height 67370, where certificates move to V4, until pearljs parses them. See `PEARLJS-GAPS.md`.
 - Mainnet: first run 2026-11-18 against pearld 1.5.7. The node's sync from genesis to block 145,331 took 173 minutes, mostly pearld fetching certificate-bearing headers from one peer at a time; the indexer keeps up with it at about 3,000 blocks a minute.
+
+## Another pearljs app
+
+[pearl-mineable](https://github.com/Honkware/pearl-mineable) is a sibling tool, also built on pearljs: it reads a model's `config.json` and works out how much of its prompt math mines Pearl, on which cards, and what it earns — in the browser, with no node.
