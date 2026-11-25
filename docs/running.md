@@ -1,6 +1,29 @@
 # Running it against a real node
 
-## pearld
+## The public node
+
+With `PEARLD_URL` unset, the indexer and server use pearlchain.live's public mainnet node at https://pearlchain.live/rpc, set up as pearljs's "Choosing a backend" guide shows. It needs no login. It gives each address 240 tokens refilled at 2 a second, and a block costs the indexer 4 (`getblockhash` and `getblock`), so `src/pace.ts` spends at 1.8 a second: about 27 blocks a minute once the first burst is used. Its websocket feed is its own format, not pearld's, so the indexer polls for new blocks.
+
+Start an empty store a number of blocks below the tip with `START_BLOCKS`; 13361 is the dashboard's month:
+
+```bash
+START_BLOCKS=13361 node --no-warnings=ExperimentalWarning dist/cli.js index
+```
+
+`INDEX_MINUTES` stops a run after that many minutes; the next run resumes from the stored cursor. The empty-block check compares each block with the mempool seen just before it, so it needs the indexer running at the tip without breaks. The Pages build below runs in turns, so it has no empty-block check.
+
+## GitHub Pages
+
+`.github/workflows/pages.yml` publishes the dashboard as files every 15 minutes. Each run restores the index from the Actions cache, indexes new blocks from the public node, reads the pools' pages if an hour has passed, saves the index, then writes the site with:
+
+```bash
+OUT_DIR=site BASE_PATH=/pearl-mining-dashboard node --no-warnings=ExperimentalWarning dist/cli.js export
+```
+
+`export` runs the web server on a free port and follows its links from the overview, writing each page as `index.html` in a folder named after its path and query (`/miners?window=day` becomes `/miners/window/day/`). The search box needs the server, so it is left out. A first run starts a month below the tip and indexes for 40 minutes at a time (`INDEX_MINUTES`), so the site fills in over about ten hours. To turn it on, set the repository's Pages source to GitHub Actions. GitHub stops scheduled workflows in a repository with no activity for 60 days.
+
+
+## A node of your own
 
 Use a pearld release binary, or build it from Pearl's source (github.com/pearl-research-labs/pearl), which needs its zk-pow Rust bindings built first; its Taskfile has the steps. Give it a limited RPC user in `pearld.conf` in its home directory, so the passwords stay off the command line:
 

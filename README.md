@@ -1,6 +1,6 @@
 # pearl-mining-dashboard
 
-A dashboard of who mines Pearl blocks, read from your own pearld node. For each pool and payout address it shows its share of blocks with a 95% interval, an estimated hashrate, where its coinbase rewards went, and how often it mined empty blocks while transactions were waiting. It also tests what each pool says about its own size against the blocks it actually found.
+A dashboard of who mines Pearl blocks, read from a pearld node: your own, or the public one at pearlchain.live. A copy updated every 15 minutes is at https://honkware.github.io/pearl-mining-dashboard/. For each pool and payout address it shows its share of blocks with a 95% interval, an estimated hashrate, where its coinbase rewards went, and how often it mined empty blocks while transactions were waiting. It also tests what each pool says about its own size against the blocks it actually found.
 
 Pool names come from what the pools publish about themselves (block lists, wallets and payout transactions), matched against the chain, with coinbase tags and the PearlStation and PearlTrack trackers filling gaps. A pool can also prove an address is its own by signing a message with it. The method behind each number, and what the chain cannot tell you, are in [docs/reference.md](docs/reference.md).
 
@@ -24,7 +24,13 @@ Then open http://127.0.0.1:8080.
 
 ## Run it on mainnet
 
-Point the indexer at a pearld node with a limited RPC user, run the web server beside it, and run `pools` to name the pools. [docs/running.md](docs/running.md) has the pearld settings and commands, and [docs/pools.md](docs/pools.md) covers naming, claims and signed names.
+With no node settings, the indexer reads from the public node at https://pearlchain.live/rpc. This indexes the last month and then follows the chain:
+
+```bash
+START_BLOCKS=13361 node --no-warnings=ExperimentalWarning dist/cli.js index
+```
+
+The public node's rate limit allows about 27 blocks a minute, so a month takes about eight hours. Then run the web server beside it, and `pools` to name the pools. [docs/running.md](docs/running.md) has the commands, the settings for a node of your own (which also gives the empty-block check), and how the GitHub Pages copy is built. [docs/pools.md](docs/pools.md) covers naming, claims and signed names.
 
 ## Made with pearljs
 

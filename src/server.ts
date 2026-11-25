@@ -9,14 +9,14 @@ import { fileURLToPath } from 'node:url';
 import type { PearlNetwork } from 'pearljs';
 import { WINDOWS, miners, network, payoutAudit, recentBlocks, stale, type WindowName } from './analysis.js';
 import type { Store } from './db.js';
-import { loadClaims, loadLabels, loadSignedNames, mergeLabels, type Claim, type Labels } from './labels.js';
+import { emptyLabels, loadClaims, loadLabels, loadSignedNames, mergeLabels, type Claim, type Labels } from './labels.js';
 import { addressPage, blocksPage, minerPage, minersPage, overview, type PageCtx } from './views.js';
 import { isValidAddress } from 'pearljs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
 const font = (pkg: string, file: string): string => join(dirname(require.resolve(`${pkg}/package.json`)), 'files', file);
-const STATIC: Record<string, { path: string; type: string }> = {
+export const STATIC: Record<string, { path: string; type: string }> = {
   '/static/app.css': { path: join(root, 'static', 'app.css'), type: 'text/css; charset=utf-8' },
   '/fonts/next-400.woff2': { path: font('@fontsource/atkinson-hyperlegible-next', 'atkinson-hyperlegible-next-latin-400-normal.woff2'), type: 'font/woff2' },
   '/fonts/next-600.woff2': { path: font('@fontsource/atkinson-hyperlegible-next', 'atkinson-hyperlegible-next-latin-600-normal.woff2'), type: 'font/woff2' },
@@ -35,11 +35,15 @@ export interface ServeOptions {
   nodeHeight?: () => Promise<number | null>;
   now?: () => number;
   log?: (line: string) => void;
+  /** Leaves out what needs the server, for pages written out as files. */
+  staticSite?: boolean;
 }
 
-function watched<T>(path: string, load: () => T): () => T {
+// A file that fails to load keeps the last good value (or `empty`), so one bad
+// entry in a generated file cannot take every page down.
+function watched<T>(path: string, load: () => T, empty: T, log?: (line: string) => void): () => T {
   let mtime = -1;
-  let value: T;
+  let value = empty;
   return () => {
     let m = 0;
     try {
@@ -48,8 +52,12 @@ function watched<T>(path: string, load: () => T): () => T {
       m = 0;
     }
     if (m !== mtime) {
-      value = load();
       mtime = m;
+      try {
+        value = load();
+      } catch (err) {
+        log?.(`[serve] ${path}: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
     return value;
   };
@@ -82,15 +90,16 @@ function decoded(path: string): string | null {
 
 export function createApp(opts: ServeOptions): Server {
   const file = (name: string): string => join(opts.dataDir, name);
-  const handLabels = watched<Labels>(file('labels.json'), () => loadLabels(file('labels.json'), opts.network));
-  const poolLabels = watched<Labels>(file('pool-labels.json'), () => loadLabels(file('pool-labels.json'), opts.network));
-  const handClaims = watched<Claim[]>(file('claims.json'), () => loadClaims(file('claims.json')));
-  const poolClaims = watched<Claim[]>(file('pool-claims.json'), () => loadClaims(file('pool-claims.json')));
+  const noLabels = emptyLabels();
+  const handLabels = watched<Labels>(file('labels.json'), () => loadLabels(file('labels.json'), opts.network), noLabels, opts.log);
+  const poolLabels = watched<Labels>(file('pool-labels.json'), () => loadLabels(file('pool-labels.json'), opts.network), noLabels, opts.log);
+  const handClaims = watched<Claim[]>(file('claims.json'), () => loadClaims(file('claims.json')), [], opts.log);
+  const poolClaims = watched<Claim[]>(file('pool-claims.json'), () => loadClaims(file('pool-claims.json')), [], opts.log);
   const signedNames = watched<Labels>(file('signed-names.json'), () => {
     const { labels: l, rejected } = loadSignedNames(file('signed-names.json'), opts.network);
     for (const r of rejected) opts.log?.(`[serve] signed-names.json: signature does not verify for ${r.pool} ${r.address}`);
     return l;
-  });
+  }, noLabels, opts.log);
   // Your own labels first, then names proven by signature, then what pools and trackers publish.
   const labels = (): Labels => mergeLabels(handLabels(), signedNames(), poolLabels());
   const claims = (): Claim[] => [...handClaims(), ...poolClaims()];
@@ -144,7 +153,7 @@ export function createApp(opts: ServeOptions): Server {
         nodeCheckedAt = now();
         nodeHeight = await opts.nodeHeight().catch(() => null);
       }
-      const ctx: PageCtx = { store: opts.store, network: opts.network, labels: labels(), claims: claims(), now: now(), nodeHeight };
+      const ctx: PageCtx = { store: opts.store, network: opts.network, labels: labels(), claims: claims(), now: now(), nodeHeight, staticSite: opts.staticSite === true, fixedClock: opts.now !== undefined };
       const tip = recentBlocks(ctx, 1)[0]?.hash ?? '';
       const key = `${url.pathname}${url.search}`;
       // A new block clears the pages, but no more than every 15 s: while the

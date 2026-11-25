@@ -54,10 +54,10 @@
   }
 }
 
-@font-face { font-family: "Atkinson Hyperlegible Next"; font-weight: 400; font-display: swap; src: url(/fonts/next-400.woff2) format("woff2"); }
-@font-face { font-family: "Atkinson Hyperlegible Next"; font-weight: 600; font-display: swap; src: url(/fonts/next-600.woff2) format("woff2"); }
-@font-face { font-family: "Atkinson Hyperlegible Next"; font-weight: 700; font-display: swap; src: url(/fonts/next-700.woff2) format("woff2"); }
-@font-face { font-family: "Atkinson Hyperlegible Mono"; font-weight: 400; font-display: swap; src: url(/fonts/mono-400.woff2) format("woff2"); }
+@font-face { font-family: "Atkinson Hyperlegible Next"; font-weight: 400; font-display: swap; src: url(../fonts/next-400.woff2) format("woff2"); }
+@font-face { font-family: "Atkinson Hyperlegible Next"; font-weight: 600; font-display: swap; src: url(../fonts/next-600.woff2) format("woff2"); }
+@font-face { font-family: "Atkinson Hyperlegible Next"; font-weight: 700; font-display: swap; src: url(../fonts/next-700.woff2) format("woff2"); }
+@font-face { font-family: "Atkinson Hyperlegible Mono"; font-weight: 400; font-display: swap; src: url(../fonts/mono-400.woff2) format("woff2"); }
 
 * { box-sizing: border-box; }
 html { background: var(--bg); color: var(--ink); }
