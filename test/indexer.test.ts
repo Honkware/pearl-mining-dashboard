@@ -88,6 +88,30 @@ describe('indexer', () => {
     store.close();
   });
 
+  test('a fork tip already recorded is not looked up again', async () => {
+    const chain = new SimulatedChain({ network: net, premine: 3 });
+    mineMix(chain, 2);
+    chain.reorg(2);
+    chain.mine(2);
+    const { store } = freshStore();
+    const headers: string[] = [];
+    const rpc = new Proxy(chain.rpc, {
+      get: (target, key) => {
+        const v = Reflect.get(target, key);
+        if (key === 'getBlockHeader') return (hash: string) => (headers.push(hash), v.call(target, hash));
+        return typeof v === 'function' ? v.bind(target) : v;
+      },
+    });
+    const run = (): Promise<void> => startIndexer({ store, rpc, network: net, stopAtTip: true, now: () => chain.time }).done;
+    await run();
+    expect(headers).toHaveLength(1);
+    chain.advanceTime(120);
+    chain.mine(1);
+    await run();
+    expect(headers).toHaveLength(1);
+    store.close();
+  });
+
   test('a restart after a reorg the indexer missed unwinds from the stored cursor', async () => {
     const chain = new SimulatedChain({ network: net, premine: 3 });
     mineMix(chain, 2);

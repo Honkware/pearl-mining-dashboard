@@ -122,7 +122,9 @@ export function leftWaiting(block: { transactions: { getId(): string }[] }, entr
 async function noteForks(opts: IndexerOptions, seenAt: number): Promise<void> {
   const tips = await opts.rpc.getChainTips();
   for (const tip of tips) {
-    if (tip.status === 'active') continue;
+    // Old tips stay listed for good; asking about each again on every check
+    // would take minutes on a rate-limited node.
+    if (tip.status === 'active' || opts.store.hasStale(tip.hash)) continue;
     let time: number | null = null;
     try {
       time = (await opts.rpc.getBlockHeader(tip.hash)).time;
