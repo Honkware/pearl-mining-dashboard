@@ -1,6 +1,7 @@
 // The expected values were computed with scipy.stats 1.x (beta.ppf, gamma.ppf,
 // binom.cdf, binom.sf, poisson.cdf, poisson.sf), independently of this code.
 import { describe, expect, test } from 'vitest';
+import { concentration, type MinerRow } from '../src/analysis.js';
 import { binomialAtLeast, binomialAtMost, countInterval, poissonAtLeast, poissonAtMost, shareInterval } from '../src/stats.js';
 
 describe('share intervals', () => {
@@ -61,5 +62,22 @@ describe('tails', () => {
     expect(binomialAtMost(10, 10, 0.3)).toBe(1);
     expect(binomialAtLeast(0, 10, 0.3)).toBe(1);
     expect(poissonAtLeast(0, 4)).toBe(1);
+  });
+});
+
+describe('concentration', () => {
+  const row = (blocks: number, labelled: boolean): MinerRow => ({ blocks, labelled }) as MinerRow;
+
+  test('two pools past half, with each unnamed address on its own', () => {
+    const c = concentration([row(40, true), row(30, true), row(20, false), row(10, false)])!;
+    expect(c.toHalf).toBe(2);
+    expect(c.top3).toBeCloseTo(0.9, 12);
+    expect(c.effective).toBeCloseTo(1 / 0.3, 12);
+    expect(c.unnamed).toBeCloseTo(0.3, 12);
+  });
+
+  test('exactly half is not past half', () => {
+    expect(concentration([row(50, true), row(50, true)])!.toHalf).toBe(2);
+    expect(concentration([])).toBeNull();
   });
 });

@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { toOutputScript, type PearlNetwork } from 'pearljs';
 import type { Store } from './db.js';
 import { cleanTag } from './facts.js';
-import type { Claim, LabelEntry } from './labels.js';
+import type { Claim, Fee, FeeTerm, LabelEntry } from './labels.js';
 
 // Pool APIs are untyped; each parser reads the few fields it needs.
 type Json = any;
@@ -19,6 +19,8 @@ export interface Evidence {
   wallet?: string;
   payoutTxids?: string[];
   claim?: { hashrate: number; networkHashrate: number };
+  /** The fee and payout scheme the pool's API states. */
+  fees?: FeeTerm[];
 }
 
 export interface PoolSource {
@@ -32,13 +34,24 @@ export interface PoolSource {
   parse(bodies: Json[]): Evidence;
 }
 
+// Scheme names as the pools spell them, with the usual acronyms in capitals: "prop" is PROP.
+const term = (scheme: string | null | undefined, pct: number): FeeTerm => ({
+  scheme: scheme == null || scheme === '' ? null : /^(prop|pps\+?|fpps|pplns|solo)$/i.test(scheme) ? scheme.toUpperCase() : scheme,
+  pct: Math.round(pct * 100) / 100,
+});
+const percentages = (terms: FeeTerm[]): FeeTerm[] => terms.filter((t) => Number.isFinite(t.pct) && t.pct >= 0 && t.pct < 100);
+
 const strip0x = (h: string): string => h.replace(/^0x/, '').toLowerCase();
 
 // Miningcore's /api/pools/<id>: the pool's hashrate and the network's; nothing when the pool reports none.
 const miningcoreClaim = (p: Json): Pick<Evidence, 'claim'> => {
   const hashrate = p.pool?.poolStats?.poolHashrate ?? 0;
   const networkHashrate = p.pool?.networkStats?.networkHashrate ?? 0;
-  return hashrate > 0 && networkHashrate > 0 ? { claim: { hashrate, networkHashrate } } : {};
+  const fee = p.pool?.poolFeePercent;
+  return {
+    ...(hashrate > 0 && networkHashrate > 0 ? { claim: { hashrate, networkHashrate } } : {}),
+    ...(typeof fee === 'number' ? { fees: [term(p.pool?.paymentProcessing?.payoutScheme, fee)] } : {}),
+  };
 };
 
 // open-ethereum-pool's /api/blocks: blocks waiting, immature and matured.
@@ -58,6 +71,8 @@ export const POOLS: PoolSource[] = [
       return {
         blockHashes: b.slice(0, -1).flatMap((p: Json) => (p?.results ?? []).map((x: Json) => strip0x(x.hash))),
         claim: { hashrate: stats.hashrate, networkHashrate: stats.net_hashrate },
+        // commission is {"PPS+": 0.03, "SOLO": 0.01}, as fractions.
+        fees: Object.entries(stats.commission ?? {}).map(([scheme, f]) => term(scheme, Number(f) * 100)),
       };
     },
   },
@@ -74,6 +89,7 @@ export const POOLS: PoolSource[] = [
     parse: ([s]) => ({
       blockHashes: (s.blocks ?? []).map((x: Json) => strip0x(x.hash)),
       claim: { hashrate: s.stats.pool.hashrate, networkHashrate: s.network.hashrate },
+      fees: [term(s.config.paymentMode, s.config.fee)],
     }),
   },
   {
@@ -85,6 +101,8 @@ export const POOLS: PoolSource[] = [
       return {
         blockHashes: blocks.data.blocks.map((x: Json) => strip0x(x.block_hash)),
         claim: { hashrate: hour.pool_hashrate, networkHashrate: hour.network_hashrate },
+        // A fraction, and it names no scheme.
+        fees: [term(null, summary.data.pool_stats.pool_fee_rate * 100)],
       };
     },
   },
@@ -95,6 +113,8 @@ export const POOLS: PoolSource[] = [
     parse: ([l]) => ({
       payoutTxids: l.payments.payments.flatMap((p: Json) => p.txids),
       claim: { hashrate: l.network.pool.hashrate, networkHashrate: l.pool.networkHashrate },
+      // Its standard fee, and the fee of the mode it calls "predictable".
+      fees: [term(null, l.network.prlExpected.poolFeePct), ...(l.predictable?.active === true ? [term('Predictable', l.predictable.feePct)] : [])],
     }),
   },
   {
@@ -104,6 +124,7 @@ export const POOLS: PoolSource[] = [
     parse: ([s]) => ({
       blockHashes: s.recent_blocks_found.map((x: Json) => strip0x(x.block_hash)),
       claim: { hashrate: s.pool_hashrate_6h, networkHashrate: s.network_hashrate },
+      fees: [term(s.payout_type, s.pool_fee_percentage)],
     }),
   },
   {
@@ -114,6 +135,7 @@ export const POOLS: PoolSource[] = [
     parse: ([s]) => ({
       blockHashes: s.pool.blocks.filter((x: Json) => typeof x === 'string' && x.includes(':')).map((x: string) => strip0x(x.split(':')[0]!)),
       claim: { hashrate: s.pool.hashrate, networkHashrate: s.network.networkHashps },
+      fees: [term(s.config.rewardScheme, s.config.fee), ...(typeof s.config.soloFee === 'number' ? [term('SOLO', s.config.soloFee)] : [])],
     }),
   },
   {
@@ -179,6 +201,8 @@ export interface TrackerSource {
   name: string;
   urls: string[];
   parse(bodies: Json[]): { pool: string; address: string }[];
+  /** Pool fees it republishes, used for pools whose own site gives none. */
+  fees?(bodies: Json[]): { pool: string; terms: FeeTerm[] }[];
   /** Pool hashrates it republishes, used for pools whose own site gives none. */
   claims?(bodies: Json[]): { pool: string; hashrate: number; networkHashrate: number }[];
 }
@@ -194,11 +218,13 @@ export const TRACKERS: TrackerSource[] = [
       const network = net.ranges.day.at(-1)?.[1] ?? 0;
       return pools.pools.filter((p: Json) => typeof p.hashrate === 'number' && p.hashrate > 0).map((p: Json) => ({ pool: p.name, hashrate: p.hashrate, networkHashrate: network }));
     },
+    fees: ([, pools]) => pools.pools.filter((p: Json) => typeof p.fee === 'number').map((p: Json) => ({ pool: p.name, terms: [term(p.scheme, p.fee)] })),
   },
   {
     name: 'pearltrack.io',
     urls: ['https://pearltrack.io/api/pools'],
     parse: ([p]) => p.filter((x: Json) => x.address).map((x: Json) => ({ pool: x.name, address: x.address })),
+    fees: ([p]) => p.filter((x: Json) => typeof x.feePercent === 'number').map((x: Json) => ({ pool: x.name, terms: [term(null, x.feePercent)] })),
   },
 ];
 
@@ -210,6 +236,7 @@ export interface PoolResult {
   published: number;
   kind: 'blocks' | 'wallet' | 'payouts';
   claim?: Claim;
+  fee?: Fee;
   error?: string;
 }
 
@@ -319,6 +346,7 @@ export interface PoolsRun {
   conflicts: { script: string; pools: string[] }[];
   /** Groups of linked addresses that hold more than one name; none of their unnamed members is named. */
   clashes: string[][];
+  fees: Fee[];
 }
 
 // Trackers spell pools their own way: "Lucky Pool", "skypool.org", "Jetski" for LuckyPool, Skypool, Jetski Pool.
@@ -346,7 +374,9 @@ export async function collectPools(opts: { store: Store; network: PearlNetwork; 
       const claim = e.claim !== undefined && e.claim.hashrate > 0 && e.claim.networkHashrate > 0
         ? { label: pool.label, hashrate: e.claim.hashrate, networkHashrate: e.claim.networkHashrate, readAt: opts.now, source: pool.site }
         : undefined;
-      results.push({ label: pool.label, ...m, ...(claim === undefined ? {} : { claim }) });
+      const terms = percentages(e.fees ?? []);
+      const fee = terms.length === 0 ? undefined : { label: pool.label, terms, readAt: opts.now, source: pool.site };
+      results.push({ label: pool.label, ...m, ...(claim === undefined ? {} : { claim }), ...(fee === undefined ? {} : { fee }) });
     } catch (err) {
       results.push({ label: pool.label, scripts: new Map(), matched: 0, published: 0, kind: 'blocks', error: err instanceof Error ? err.message : String(err) });
     }
@@ -354,6 +384,7 @@ export async function collectPools(opts: { store: Store; network: PearlNetwork; 
 
   const trackerLabels: LabelEntry[] = [];
   const trackerClaims: Claim[] = [];
+  const trackerFees: Fee[] = [];
   const named = (): Set<string> => new Set([...results.flatMap((r) => [...r.scripts.keys()]), ...trackerLabels.flatMap((l) => l.scripts)]);
   for (const t of opts.trackers ?? TRACKERS) {
     try {
@@ -386,6 +417,13 @@ export async function collectPools(opts: { store: Store; network: PearlNetwork; 
           trackerClaims.push({ label, hashrate: c.hashrate, networkHashrate: c.networkHashrate, readAt: opts.now, source: t.name });
         }
       }
+      for (const f of t.fees?.(bodies) ?? []) {
+        const label = results.find((r) => sameName(r.label) === sameName(f.pool))?.label ?? trackerLabels.find((l) => sameName(l.label) === sameName(f.pool))?.label ?? f.pool;
+        const terms = percentages(f.terms);
+        if (terms.length > 0 && !trackerFees.some((x) => x.label === label) && !results.some((r) => r.label === label && r.fee !== undefined)) {
+          trackerFees.push({ label, terms, readAt: opts.now, source: t.name });
+        }
+      }
     } catch (err) {
       results.push({ label: t.name, scripts: new Map(), matched: 0, published: 0, kind: 'blocks', error: err instanceof Error ? err.message : String(err) });
     }
@@ -411,11 +449,13 @@ export async function collectPools(opts: { store: Store; network: PearlNetwork; 
   labels.push(...tagLabels(opts.store, [...(opts.pools ?? POOLS).map((p) => p.label), ...trackerLabels.map((l) => l.label)], new Set(labels.flatMap((l) => l.scripts)), day));
   const linked = linkBySpending(opts.store, labels, day);
   const claims = [...results.flatMap((r) => (r.claim === undefined ? [] : [r.claim])), ...trackerClaims];
-  return { results, labels: [...labels, ...linked.added], claims, conflicts, clashes: linked.clashes };
+  const fees = [...results.flatMap((r) => (r.fee === undefined ? [] : [r.fee])), ...trackerFees];
+  return { results, labels: [...labels, ...linked.added], claims, conflicts, clashes: linked.clashes, fees };
 }
 
-/** Writes pool-labels.json and pool-claims.json; the hand-edited labels.json and claims.json are left alone. */
+/** Writes pool-labels.json, pool-claims.json and pool-fees.json; the hand-edited labels.json, claims.json and fees.json are left alone. */
 export function writePools(dataDir: string, run: PoolsRun): void {
   writeFileSync(join(dataDir, 'pool-labels.json'), JSON.stringify({ identities: run.labels }, null, 2));
   writeFileSync(join(dataDir, 'pool-claims.json'), JSON.stringify({ claims: run.claims }, null, 2));
+  writeFileSync(join(dataDir, 'pool-fees.json'), JSON.stringify({ fees: run.fees }, null, 2));
 }

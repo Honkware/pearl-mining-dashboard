@@ -1,6 +1,6 @@
 # pearl-mining-dashboard
 
-A dashboard of who mines Pearl blocks, read from a pearld node: your own, or the public one at pearlchain.live. A copy updated every 15 minutes is at https://honkware.github.io/pearl-mining-dashboard/. For each pool and payout address it shows its share of blocks with a 95% interval, an estimated hashrate, where its coinbase rewards went, and how often it mined empty blocks while transactions were waiting. It also tests what each pool says about its own size against the blocks it actually found.
+A dashboard of who mines Pearl blocks, read from a pearld node: your own, or the public one at pearlchain.live. A copy updated every 15 minutes is at https://honkware.github.io/pearl-mining-dashboard/. For each pool and payout address it shows its share of blocks with a 95% interval, an estimated hashrate, the fee it publishes, where its coinbase rewards went, and how often it mined empty blocks while transactions were waiting. It also tests what each pool says about its own size against the blocks it actually found.
 
 Pool names come from what the pools publish about themselves (block lists, wallets and payout transactions), matched against the chain, with coinbase tags and the PearlStation and PearlTrack trackers filling gaps. A pool can also prove an address is its own by signing a message with it. The method behind each number, and what the chain cannot tell you, are in [docs/reference.md](docs/reference.md).
 

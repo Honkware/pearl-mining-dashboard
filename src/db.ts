@@ -219,6 +219,10 @@ export class Store {
   }
 
   /** A side-branch tip the node knows of, from getchaintips. Kept only if not already recorded. */
+  hasStale(hash: string): boolean {
+    return this.db.prepare('SELECT 1 FROM stale WHERE hash = ?').get(hash) !== undefined;
+  }
+
   noteForkTip(hash: string, height: number, time: number | null, seenAt: number): boolean {
     const r = this.db
       .prepare('INSERT OR IGNORE INTO stale (hash, height, time, payout_script, reward, source, seen_at) VALUES (?, ?, ?, NULL, NULL, ?, ?)')

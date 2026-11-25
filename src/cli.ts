@@ -37,7 +37,7 @@ async function main(): Promise<void> {
     const store = new Store(join(dataDir, `${network.name}.sqlite`));
     const run = await collectPools({ store, network, dataDir, now: Math.floor(Date.now() / 1000) });
     for (const r of run.results) {
-      log(`[pools] ${r.label}: ${r.error ?? `${r.scripts.size} script(s), ${r.matched} of ${r.published} ${r.kind} matched${r.claim ? `, claims ${(100 * (r.claim.hashrate! / r.claim.networkHashrate!)).toFixed(1)}%` : ''}`}`);
+      log(`[pools] ${r.label}: ${r.error ?? `${r.scripts.size} script(s), ${r.matched} of ${r.published} ${r.kind} matched${r.claim ? `, claims ${(100 * (r.claim.hashrate! / r.claim.networkHashrate!)).toFixed(1)}%` : ''}${r.fee ? `, fee ${r.fee.terms.map((t) => `${t.pct}%${t.scheme === null ? '' : ` ${t.scheme}`}`).join(', ')}` : ''}`}`);
     }
     for (const c of run.conflicts) log(`[pools] not labelled, claimed by ${c.pools.join(' and ')}: ${c.script}`);
     for (const c of run.clashes) log(`[pools] linked addresses span ${c.join(' and ')}; their unnamed ones stay unnamed`);

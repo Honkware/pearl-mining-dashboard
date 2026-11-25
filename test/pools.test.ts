@@ -7,7 +7,7 @@ import { customNetwork, networks, toOutputScript } from 'pearljs';
 import { SimulatedChain, testAddress } from 'pearljs/testing';
 import { Store } from '../src/db.js';
 import { startIndexer } from '../src/indexer.js';
-import { collectPools, type PoolSource, type TrackerSource } from '../src/pools.js';
+import { POOLS, collectPools, type PoolSource, type TrackerSource } from '../src/pools.js';
 
 const net = customNetwork(networks.regtest, { coinbaseMaturity: 2 });
 const dirs: string[] = [];
@@ -100,4 +100,36 @@ test("F2Pool's hashrate and the network's are read from its homepage row", async
   const claim = f2.parse([row]).claim!;
   expect(claim.hashrate).toBeCloseTo(3956.91e15, -10);
   expect(claim.networkHashrate).toBeCloseTo(103.69e18, -13);
+});
+
+test("a pool's own fee comes first, and a tracker's only fills in for pools that publish none", async () => {
+  const chain = new SimulatedChain({ network: net, premine: 3 });
+  const dir = mkdtempSync(join(tmpdir(), 'pmd-pools-'));
+  dirs.push(dir);
+  const store = new Store(join(dir, 'x.sqlite'));
+  await startIndexer({ store, rpc: chain.rpc, network: net, stopAtTip: true }).done;
+  const bodies: Record<string, unknown> = {
+    'https://a.test/stats': { fee: 2, mode: 'pplns' },
+    'https://b.test/stats': {},
+    'https://t.test/pools': [{ name: 'pool a', fee: 1, scheme: 'PROP' }, { name: 'Pool B', fee: 0.5, scheme: 'PPS' }, { name: 'Pool B', fee: 9, scheme: 'PPS' }],
+  };
+  const fake = (async (url: string) => new Response(JSON.stringify(bodies[url]), { status: 200 })) as typeof fetch;
+  const pools: PoolSource[] = [
+    { label: 'Pool A', site: 'https://a.test', urls: ['https://a.test/stats'], parse: ([x]) => ({ fees: [{ scheme: x.mode.toUpperCase(), pct: x.fee }] }) },
+    { label: 'Pool B', site: 'https://b.test', urls: ['https://b.test/stats'], parse: () => ({}) },
+  ];
+  const trackers: TrackerSource[] = [{ name: 'tracker.test', urls: ['https://t.test/pools'], parse: () => [], fees: ([x]) => x.map((p: { name: string; fee: number; scheme: string }) => ({ pool: p.name, terms: [{ scheme: p.scheme, pct: p.fee }] })) }];
+  const run = await collectPools({ store, network: net, dataDir: dir, now: chain.time, fetch: fake, pools, trackers });
+  expect(run.fees).toEqual([
+    { label: 'Pool A', terms: [{ scheme: 'PPLNS', pct: 2 }], readAt: chain.time, source: 'https://a.test' },
+    { label: 'Pool B', terms: [{ scheme: 'PPS', pct: 0.5 }], readAt: chain.time, source: 'tracker.test' },
+  ]);
+  store.close();
+});
+
+test("Kryptex's commission fractions are read as one fee per mode", () => {
+  const kryptex = POOLS.find((p) => p.label === 'Kryptex')!;
+  const pages = kryptex.urls.slice(0, -1).map(() => ({ results: [] }));
+  const e = kryptex.parse([...pages, { hashrate: 1, net_hashrate: 2, fee_type: 'PPS+', fee: 0.03, commission: { 'PPS+': 0.03, SOLO: 0.01 } }]);
+  expect(e.fees).toEqual([{ scheme: 'PPS+', pct: 3 }, { scheme: 'SOLO', pct: 1 }]);
 });

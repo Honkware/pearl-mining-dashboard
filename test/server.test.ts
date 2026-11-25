@@ -96,3 +96,15 @@ test('a claims file that fails to load leaves the pages up', async () => {
   expect(res.status).toBe(200);
   expect(await res.text()).toContain('Big pool');
 });
+
+test('fees show beside each pool, with fees.json over what the pools publish, and the blocks are summed up by how few hold half', async () => {
+  writeFileSync(join(dir, 'pool-fees.json'), JSON.stringify({ fees: [{ label: 'Big pool', terms: [{ scheme: 'PPS+', pct: 3 }], readAt: 1, source: 'https://big.test' }] }));
+  writeFileSync(join(dir, 'fees.json'), JSON.stringify({ fees: [{ label: 'Big pool', terms: [{ scheme: 'PROP', pct: 1.5 }, { scheme: 'SOLO', pct: 1 }], readAt: 2, source: 'its terms page' }] }));
+  const html = await (await fetch(`${base}/?window=day`)).text();
+  expect(html).toContain('<th>Fee</th>');
+  expect(html).toContain('1.5% PROP, 1% SOLO');
+  expect(html).not.toContain('3% PPS+');
+  expect(html).toMatch(/Half the blocks<\/div><div class="v">1 miner</);
+  const page = await (await fetch(`${base}/miner/label:Big%20pool`)).text();
+  expect(page).toMatch(/<div class="k">Fee<\/div><div class="v">1.5% PROP, 1% SOLO<\/div>/);
+});

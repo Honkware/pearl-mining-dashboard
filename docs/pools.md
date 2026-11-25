@@ -4,7 +4,7 @@
 node --no-warnings=ExperimentalWarning dist/cli.js pools
 ```
 
-`pools` reads each pool's public API (block hashes, its coinbase wallet, or its payout transactions), matches it against the indexed chain, and writes `pool-labels.json` and `pool-claims.json` in `DATA_DIR`, with a dated copy of everything it read under `sources/`. It then fills in addresses that PearlStation and PearlTrack name, and gives an unnamed address the name of any named address whose coinbases it was spent together with. Run it again after the indexer reaches the tip, and now and then, since pool feeds only cover recent blocks. The pools and endpoints are listed in `src/pools.ts`.
+`pools` reads each pool's public API (block hashes, its coinbase wallet, or its payout transactions), matches it against the indexed chain, and writes `pool-labels.json`, `pool-claims.json` and `pool-fees.json` in `DATA_DIR`, with a dated copy of everything it read under `sources/`. It then fills in addresses that PearlStation and PearlTrack name, and gives an unnamed address the name of any named address whose coinbases it was spent together with. Run it again after the indexer reaches the tip, and now and then, since pool feeds only cover recent blocks. The pools and endpoints are listed in `src/pools.ts`.
 
 Names are taken in this order, the first one winning: `labels.json` (yours), `signed-names.json` (proven by signature), then `pool-labels.json`. An unnamed address shows its coinbase tag if it writes one, or "Unnamed pool" if it pays its coinbases out to ten or more addresses at once.
 
@@ -35,3 +35,13 @@ All these files are reread when they change.
 ```
 
 On the pages, "Pool claims" is the share a pool publishes about itself, and the column only appears when a miner in view has one. "matches" means the claim is inside the 95% range of what the pool's blocks show; "too high" or "too low" means it is outside, which normal luck produces less than 5 times in 100. A claim describes the pool now, so it is only tested on the 1D and 1W windows.
+
+## Fees
+
+`pool-fees.json` has the fee and payout scheme each pool's own API states, as the pool spells the scheme. For a pool that publishes none, PearlStation's figure is used, then PearlTrack's, and hovering the fee names the source. Trackers and explorers often disagree with a pool's own figure, which is why it comes first. `fees.json` takes the same shape and wins over the generated file:
+
+```json
+{ "fees": [ { "label": "Example pool", "terms": [ { "scheme": "PPLNS", "pct": 1 } ], "readAt": 1795046400, "source": "the pool's terms page" } ] }
+```
+
+A published fee is what the pool says it charges. Under "Payouts", a miner's page shows what share of its rewards went to outside addresses, which is what the chain can check.

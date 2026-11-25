@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import type { PearlNetwork } from 'pearljs';
 import { WINDOWS, miners, network, payoutAudit, recentBlocks, stale, type WindowName } from './analysis.js';
 import type { Store } from './db.js';
-import { emptyLabels, loadClaims, loadLabels, loadSignedNames, mergeLabels, type Claim, type Labels } from './labels.js';
+import { emptyLabels, loadClaims, loadFees, loadLabels, loadSignedNames, mergeLabels, type Claim, type Fee, type Labels } from './labels.js';
 import { addressPage, blocksPage, minerPage, minersPage, overview, type PageCtx } from './views.js';
 import { isValidAddress } from 'pearljs';
 
@@ -95,6 +95,8 @@ export function createApp(opts: ServeOptions): Server {
   const poolLabels = watched<Labels>(file('pool-labels.json'), () => loadLabels(file('pool-labels.json'), opts.network), noLabels, opts.log);
   const handClaims = watched<Claim[]>(file('claims.json'), () => loadClaims(file('claims.json')), [], opts.log);
   const poolClaims = watched<Claim[]>(file('pool-claims.json'), () => loadClaims(file('pool-claims.json')), [], opts.log);
+  const handFees = watched<Fee[]>(file('fees.json'), () => loadFees(file('fees.json')), [], opts.log);
+  const poolFees = watched<Fee[]>(file('pool-fees.json'), () => loadFees(file('pool-fees.json')), [], opts.log);
   const signedNames = watched<Labels>(file('signed-names.json'), () => {
     const { labels: l, rejected } = loadSignedNames(file('signed-names.json'), opts.network);
     for (const r of rejected) opts.log?.(`[serve] signed-names.json: signature does not verify for ${r.pool} ${r.address}`);
@@ -103,6 +105,11 @@ export function createApp(opts: ServeOptions): Server {
   // Your own labels first, then names proven by signature, then what pools and trackers publish.
   const labels = (): Labels => mergeLabels(handLabels(), signedNames(), poolLabels());
   const claims = (): Claim[] => [...handClaims(), ...poolClaims()];
+  // A pool's fee from fees.json wins over the one read from its site.
+  const fees = (): Fee[] => {
+    const own = handFees();
+    return [...own, ...poolFees().filter((f) => !own.some((o) => o.label === f.label))];
+  };
   const now = opts.now ?? (() => Math.floor(Date.now() / 1000));
   const cache = new Map<string, string>();
   let cacheTip = '';
@@ -112,7 +119,7 @@ export function createApp(opts: ServeOptions): Server {
 
   // Labels and claims can change without a new block; their state is part of the key.
   const cacheKey = (path: string, ctx: PageCtx): string =>
-    `${path}|${ctx.labels.byScript.size}|${ctx.labels.entries.length}|${ctx.claims.map((c) => c.readAt).join(',')}`;
+    `${path}|${ctx.labels.byScript.size}|${ctx.labels.entries.length}|${ctx.claims.map((c) => c.readAt).join(',')}|${(ctx.fees ?? []).map((f) => f.readAt).join(',')}`;
 
   // Renders the overview for every window after new blocks, one per turn of the
   // event loop, so switching windows finds the page ready; "all" alone takes seconds.
@@ -153,7 +160,7 @@ export function createApp(opts: ServeOptions): Server {
         nodeCheckedAt = now();
         nodeHeight = await opts.nodeHeight().catch(() => null);
       }
-      const ctx: PageCtx = { store: opts.store, network: opts.network, labels: labels(), claims: claims(), now: now(), nodeHeight, staticSite: opts.staticSite === true, fixedClock: opts.now !== undefined };
+      const ctx: PageCtx = { store: opts.store, network: opts.network, labels: labels(), claims: claims(), fees: fees(), now: now(), nodeHeight, staticSite: opts.staticSite === true, fixedClock: opts.now !== undefined };
       const tip = recentBlocks(ctx, 1)[0]?.hash ?? '';
       const key = `${url.pathname}${url.search}`;
       // A new block clears the pages, but no more than every 15 s: while the
@@ -235,7 +242,7 @@ export function serve(opts: ServeOptions & { refreshPools?: boolean }): Promise<
         const result = await collectPools({ store: opts.store, network: opts.network, dataDir: opts.dataDir, now: Math.floor(Date.now() / 1000) });
         writePools(opts.dataDir, result);
         const failed = result.results.filter((r) => r.error !== undefined).map((r) => r.label);
-        opts.log?.(`[pools] refreshed ${result.labels.length} names, ${result.claims.length} claims${failed.length ? `; failed: ${failed.join(', ')}` : ''}`);
+        opts.log?.(`[pools] refreshed ${result.labels.length} names, ${result.claims.length} claims, ${result.fees.length} fees${failed.length ? `; failed: ${failed.join(', ')}` : ''}`);
       } catch (err) {
         opts.log?.(`[pools] refresh failed: ${err instanceof Error ? err.message : String(err)}`);
       }
