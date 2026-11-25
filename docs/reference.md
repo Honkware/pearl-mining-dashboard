@@ -2,8 +2,8 @@
 
 ## Pages and API
 
-- `/` headline numbers, the top ten miners, hashrate and block-time charts, latest blocks. `?window=day|week|month|all` picks the last 445, 3,118 or 13,361 blocks, or all of them.
-- `/miners` every miner, with a ranking chart of shares, their likely ranges and what pools say.
+- `/` headline numbers, how few miners found half the blocks, the top ten miners, hashrate and block-time charts, latest blocks. `?window=day|week|month|all` picks the last 445, 3,118 or 13,361 blocks, or all of them.
+- `/miners` every miner, with a ranking chart of shares, their likely ranges, what pools say and the fees they publish.
 - `/miner/<id>` one miner: its numbers, its pool claim against what it found, where its coinbase rewards went (earned, spent, held, how many addresses it paid), its empty blocks and whether transactions were waiting when it mined them, its proof types, its addresses and coinbase tags, and other addresses it shares an owner with.
 - `/address/<address>` one address: what it mined, and the payments it received from transactions that spend pool coinbases. Typing an address into the miners search goes here.
 - `/blocks` every block, newest first, and the stale blocks this node saw.
@@ -18,6 +18,7 @@ The question it started from was why a pool does not publish its measured hashra
 What it answers from public data alone:
 
 - Who was paid for each block, and each address's or labelled pool's share of the last day, week or month of blocks, with an exact 95% interval.
+- How concentrated mining is: the fewest miners that found more than half the blocks, the top three's share, and the effective number of miners (1 / Σ share²). Each unnamed address counts as a miner of its own, so these can only understate concentration; the share of blocks with a name is shown beside them.
 - An estimated hashrate per miner and for the network, in pearld's units (the same as `getnetworkhashps`), with an interval.
 - Whether a pool's published share or hashrate is consistent with the blocks its labelled addresses found, as a probability.
 - Network effort and block times against the 194-second target, difficulty, empty blocks, fees claimed over the subsidy, certificate versions, and stale blocks this node saw.

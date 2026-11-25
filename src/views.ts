@@ -5,7 +5,9 @@ import {
   WINDOWS,
   allTime,
   certificateMix,
+  concentration,
   emptyBlocks,
+  feeOf,
   payoutAudit,
   receivedFromPools,
   scriptsOf,
@@ -23,6 +25,7 @@ import {
   type RecentBlock,
   type WindowName,
 } from './analysis.js';
+import type { Fee } from './labels.js';
 import { esc, intervalHistogram, lineChart, pct, rankChart, shareBar, sparkline } from './charts.js';
 
 const GRAIN = 100_000_000n;
@@ -159,6 +162,10 @@ function windowTabs(current: WindowName, base: string): string {
     .join('')}</div>`;
 }
 
+/** "3% PPS+, 1% SOLO" */
+const feeText = (f: Fee): string => f.terms.map((t) => `${t.pct}%${t.scheme === null ? '' : ` ${esc(t.scheme)}`}`).join(', ');
+const feeSource = (f: Fee): string => `${sourceName(f.source)}, ${utc(f.readAt).slice(0, 10)}`;
+
 const range = (lo: number, hi: number, fmt: (v: number) => string): string => `${fmt(lo)} to ${fmt(hi)}`;
 
 function stats(net: Network, rows: MinerRow[], target: number): string {
@@ -166,12 +173,14 @@ function stats(net: Network, rows: MinerRow[], target: number): string {
     `<div class="stat"${title ? ` title="${esc(title)}"` : ''}><div class="k">${label}</div><div class="v">${value}</div><div class="s">${sub}</div></div>`;
   const plusMinus = (net.rateInterval.hi - net.rateInterval.lo) / 2 / net.rate;
   const top = rows[0];
+  const c = concentration(rows);
   return `<div class="stats">
 ${tile('Hashrate', rate(net.rate), `±${pct(plusMinus, 0)}`, `${rate(net.rateInterval.lo)} to ${rate(net.rateInterval.hi)}`)}
 ${tile('Difficulty', bigNum(net.difficulty), `<span class="${net.difficultyChange >= 0 ? 'up' : 'down'}">${net.difficultyChange >= 0 ? '+' : '−'}${pct(Math.abs(net.difficultyChange))}</span>`)}
 ${tile('Average block time', clock(net.meanInterval), `target ${clock(target)}`)}
-${tile('Active miners', int(rows.length), `last ${int(net.blocks)} blocks`)}
+${tile('Active miners', int(rows.length), c === null ? '' : `${pct(1 - c.unnamed, 0)} of blocks named`)}
 ${top === undefined ? '' : tile('Largest miner', pct(top.share), esc(minerTitle(top).text), `${pct(top.shareInterval.lo)} to ${pct(top.shareInterval.hi)}`)}
+${c === null ? '' : tile('Half the blocks', `${c.toHalf} miner${c.toHalf === 1 ? '' : 's'}`, `top 3 ${pct(c.top3, 0)}`, `effective ${c.effective.toFixed(1)} miners; unnamed addresses counted one each`)}
 </div>`;
 }
 
@@ -199,11 +208,17 @@ function claimCell(r: MinerRow): string {
 /** The miners table; the claims column only appears when some row in it has a claim. */
 function minerTable(ctx: PageCtx, rows: MinerRow[], ranks?: number[]): string {
   const claims = rows.some((r) => r.claim !== null);
-  const head = `<thead><tr><th></th><th>Miner</th><th>Share of blocks</th><th class="n">Blocks</th><th class="n">Hashrate</th>${claims ? '<th>Pool claims</th>' : ''}<th class="n">Last block</th></tr></thead>`;
-  return `<div class="scroll"><table>${head}<tbody>${minerRows(ctx, rows, claims, ranks)}</tbody></table></div>`;
+  const fees = rows.some((r) => feeOf(ctx, r) !== null);
+  const head = `<thead><tr><th></th><th>Miner</th><th>Share of blocks</th><th class="n">Blocks</th><th class="n">Hashrate</th>${claims ? '<th>Pool claims</th>' : ''}${fees ? '<th>Fee</th>' : ''}<th class="n">Last block</th></tr></thead>`;
+  return `<div class="scroll"><table>${head}<tbody>${minerRows(ctx, rows, claims, fees, ranks)}</tbody></table></div>`;
 }
 
-function minerRows(ctx: PageCtx, rows: MinerRow[], claims: boolean, ranks?: number[]): string {
+function feeCell(ctx: PageCtx, r: MinerRow): string {
+  const f = feeOf(ctx, r);
+  return f === null ? '<td></td>' : `<td class="fee" title="${esc(feeSource(f))}">${feeText(f)}</td>`;
+}
+
+function minerRows(ctx: PageCtx, rows: MinerRow[], claims: boolean, fees: boolean, ranks?: number[]): string {
   const max = Math.max(0.05, ...rows.map((r) => Math.max(r.shareInterval.hi, r.claim?.share ?? 0)));
   return rows
     .map((r, i) => `<tr>
@@ -213,6 +228,7 @@ function minerRows(ctx: PageCtx, rows: MinerRow[], claims: boolean, ranks?: numb
 <td class="n">${int(r.blocks)}</td>
 <td class="n" title="${esc(range(r.rateInterval.lo, r.rateInterval.hi, rate))}">${rate(r.rate)}</td>
 ${claims ? claimCell(r) : ''}
+${fees ? feeCell(ctx, r) : ''}
 <td class="n"><span class="age">${since(ctx, r.lastTime)}</span></td>
 </tr>`)
     .join('');
@@ -373,6 +389,7 @@ export function minerPage(ctx: PageCtx, id: string, window: WindowName): string 
   const entry = id.startsWith('label:') ? ctx.labels.entries.find((e) => e.label === all.name) : undefined;
   const addresses = scriptsOf(ctx, id).map((s) => addressOf(s, ctx));
   const hist = shareHistory(ctx, 14, WINDOWS.day).counts.get(id) ?? new Array<number>(14).fill(0);
+  const fee = feeOf(ctx, all);
   const tile = (k: string, v: string, s: string, title = ''): string => `<div class="stat"${title ? ` title="${esc(title)}"` : ''}><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
   const statsRow = `<div class="stats">
 ${tile('Share of blocks', current === undefined ? '0%' : pct(current.share), current === undefined ? `none of the last ${int(net?.blocks ?? 0)}` : `${pct(current.shareInterval.lo)} to ${pct(current.shareInterval.hi)}`)}
@@ -380,6 +397,7 @@ ${tile('Blocks', int(current?.blocks ?? 0), `of ${int(net?.blocks ?? 0)}`)}
 ${tile('Hashrate', current === undefined ? '0' : rate(current.rate), current === undefined ? '' : `${rate(current.rateInterval.lo)} to ${rate(current.rateInterval.hi)}`)}
 ${tile('Last block', int(all.lastHeight), `${since(ctx, all.lastTime)} ago`)}
 ${tile('Per day, 14 days', sparkline(hist, WINDOWS.day), '')}
+${fee === null ? '' : tile('Fee', feeText(fee), esc(feeSource(fee)))}
 </div>`;
   const audit = payoutAudit(ctx, id);
   const paidOut = audit === null ? '' : `<section class="card">

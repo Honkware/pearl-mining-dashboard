@@ -98,6 +98,39 @@ export function loadClaims(path: string): Claim[] {
   }
 }
 
+/** One way a pool pays: its scheme as the pool names it (PROP, PPLNS, PPS+...) and its fee in percent. */
+export interface FeeTerm {
+  scheme: string | null;
+  pct: number;
+}
+
+/** The fees a pool publishes, read from its own site or, failing that, a tracker. */
+export interface Fee {
+  label: string;
+  terms: FeeTerm[];
+  readAt: number;
+  source: string;
+}
+
+export function parseFees(raw: string): Fee[] {
+  const doc = JSON.parse(raw) as { fees?: Fee[] };
+  const fees = doc.fees ?? [];
+  for (const f of fees) {
+    if (!Array.isArray(f.terms) || f.terms.some((t) => typeof t.pct !== 'number' || !(t.pct >= 0 && t.pct < 100))) throw new Error(`fees: ${f.label} has a fee that is not a percentage`);
+    if (typeof f.source !== 'string' || f.source === '') throw new Error(`fees: ${f.label} has no source`);
+  }
+  return fees;
+}
+
+export function loadFees(path: string): Fee[] {
+  try {
+    return parseFees(readFileSync(path, 'utf8'));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
+  }
+}
+
 export const claimedShare = (c: Claim): number => c.share ?? c.hashrate! / c.networkHashrate!;
 
 /** The identity key a payout script belongs to: `label:<name>` or `script:<hex>`. */

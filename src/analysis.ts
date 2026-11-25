@@ -5,7 +5,7 @@
 // a day, a week and 30 days of 194-second blocks.
 import type { PearlNetwork } from 'pearljs';
 import { INPUTS_COMPLETE, type Store } from './db.js';
-import { claimedShare, identityName, identityOf, type Claim, type Labels } from './labels.js';
+import { claimedShare, identityName, identityOf, type Claim, type Fee, type Labels } from './labels.js';
 import { cleanTag, DEFAULT_TAG } from './facts.js';
 import { binomialAtLeast, binomialAtMost, countInterval, shareInterval, type Interval } from './stats.js';
 
@@ -36,6 +36,7 @@ export interface Context {
   network: PearlNetwork;
   labels: Labels;
   claims: Claim[];
+  fees?: Fee[];
 }
 
 export interface Network {
@@ -232,27 +233,6 @@ export function miners(ctx: Context, window: WindowName): MinerRow[] {
     });
   }
   return out.sort((a, b) => b.blocks - a.blocks || b.lastHeight - a.lastHeight);
-}
-
-/** Share of the window's blocks found by the top `n` identities, for n = 1 up to `upTo`. */
-export function concentration(rowsByShare: MinerRow[], total: number, upTo = 5): { top: number; blocks: number; share: number; interval: Interval }[] {
-  const out = [];
-  let k = 0;
-  for (let i = 0; i < Math.min(upTo, rowsByShare.length); i++) {
-    k += rowsByShare[i]!.blocks;
-    out.push({ top: i + 1, blocks: k, share: k / total, interval: shareInterval(k, total) });
-  }
-  return out;
-}
-
-/** Fewest identities that together found more than half the window's blocks. */
-export function nakamoto(rowsByShare: MinerRow[], total: number): number {
-  let k = 0;
-  for (let i = 0; i < rowsByShare.length; i++) {
-    k += rowsByShare[i]!.blocks;
-    if (2 * k > total) return i + 1;
-  }
-  return rowsByShare.length;
 }
 
 export interface RecentBlock {
@@ -640,3 +620,37 @@ export function allTime(ctx: Context, id: string): AllTime | null {
       .get(...scripts) !== undefined;
   return { id, name: identityName(id, ctx.network), labelled, blocks: s.n, lastHeight: s.h, lastTime: last.time, tags: commonTags(tags), paysOut };
 }
+
+export interface Concentration {
+  /** Fewest miners that together found more than half the blocks. */
+  toHalf: number;
+  /** Share of blocks found by the three largest. */
+  top3: number;
+  /** 1 / Σ share², the number of equal miners that would be as concentrated. */
+  effective: number;
+  /** Share of blocks paid to addresses with no name. */
+  unnamed: number;
+}
+
+/**
+ * How few miners hold the blocks, over the rows of a window. Each unnamed
+ * address counts as a miner of its own; some may belong to one pool, so the
+ * true figures can only be more concentrated than these.
+ */
+export function concentration(rows: MinerRow[]): Concentration | null {
+  const total = rows.reduce((s, r) => s + r.blocks, 0);
+  if (total === 0) return null;
+  const shares = rows.map((r) => r.blocks / total).sort((a, b) => b - a);
+  let toHalf = 0;
+  let sum = 0;
+  while (sum <= 0.5 && toHalf < shares.length) sum += shares[toHalf++]!;
+  return {
+    toHalf,
+    top3: shares.slice(0, 3).reduce((s, x) => s + x, 0),
+    effective: 1 / shares.reduce((s, x) => s + x * x, 0),
+    unnamed: rows.filter((r) => !r.labelled).reduce((s, r) => s + r.blocks, 0) / total,
+  };
+}
+
+export const feeOf = (ctx: Context, row: Pick<MinerRow, 'labelled' | 'name'>): Fee | null =>
+  row.labelled ? ctx.fees?.find((f) => f.label === row.name) ?? null : null;
